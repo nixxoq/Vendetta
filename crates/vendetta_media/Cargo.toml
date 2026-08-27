@@ -1,0 +1,23 @@
+[package]
+name = "vendetta_media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+vendetta_core.workspace = true
+vendetta_model.workspace = true
+vendetta_storage.workspace = true
+vendetta_tg_adapter.workspace = true
+grammers-tl-types.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

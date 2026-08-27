@@ -1,0 +1,59 @@
+[workspace]
+members = [
+    "crates/vendetta_core",
+    "crates/vendetta_model",
+    "crates/vendetta_storage",
+    "crates/vendetta_tg_adapter",
+    "crates/vendetta_sync",
+    "crates/vendetta_media",
+    "crates/vendetta_render",
+    "crates/vendetta_verify",
+    "crates/vendetta_cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["nixxoq"]
+
+[workspace.dependencies]
+grammers-client = { git = "https://codeberg.org/Lonami/grammers.git", rev = "9fef0bae1e59b6138ae7777c783983934a80e129", default-features = false }
+grammers-tl-types = { git = "https://codeberg.org/Lonami/grammers.git", rev = "9fef0bae1e59b6138ae7777c783983934a80e129", default-features = false, features = [
+    "impl-serde",
+    "tl-api",
+] }
+grammers-session = { git = "https://codeberg.org/Lonami/grammers.git", rev = "9fef0bae1e59b6138ae7777c783983934a80e129", default-features = false, features = [
+    "serde",
+] }
+grammers-mtsender = { git = "https://codeberg.org/Lonami/grammers.git", rev = "9fef0bae1e59b6138ae7777c783983934a80e129" }
+
+vendetta_core = { path = "crates/vendetta_core" }
+vendetta_model = { path = "crates/vendetta_model" }
+vendetta_storage = { path = "crates/vendetta_storage" }
+vendetta_tg_adapter = { path = "crates/vendetta_tg_adapter" }
+vendetta_sync = { path = "crates/vendetta_sync" }
+vendetta_media = { path = "crates/vendetta_media" }
+vendetta_render = { path = "crates/vendetta_render" }
+vendetta_verify = { path = "crates/vendetta_verify" }
+
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+
+tokio = { version = "1.52.3", features = ["full"] }
+futures = "0.3.34"
+async-trait = "0.1.92"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+thiserror = "2.0.12"
+anyhow = "1.0.98"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.140"
+bytes = "1.10.1"
+sha2 = "0.10.8"
+tempfile = "3.17.1"
+clap = { version = "4.5", features = ["derive"] }
+assert_cmd = "2.0"
+predicates = "3.1"
+rpassword = "7.3"
+strum = { version = "0.28", features = ["derive"] }

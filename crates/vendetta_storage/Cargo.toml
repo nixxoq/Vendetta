@@ -1,0 +1,18 @@
+[package]
+name = "vendetta_storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+vendetta_core.workspace = true
+vendetta_model.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

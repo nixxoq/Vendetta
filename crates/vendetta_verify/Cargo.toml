@@ -1,0 +1,24 @@
+[package]
+name = "vendetta_verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+vendetta_core.workspace = true
+vendetta_model.workspace = true
+vendetta_storage.workspace = true
+vendetta_render.workspace = true
+grammers-tl-types.workspace = true
+rusqlite.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
