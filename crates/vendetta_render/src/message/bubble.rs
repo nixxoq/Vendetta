@@ -98,30 +98,45 @@ fn render_telegram_like(
         classes.push("state-deleted");
     }
 
+    let is_sticker_msg = msg.media_items.len() == 1
+        && msg.media_items[0].record.kind == vendetta_model::MediaKind::Sticker
+        && msg.formatted_html.is_none()
+        && msg.raw_text.as_deref().unwrap_or("").is_empty();
+
+    if is_sticker_msg {
+        classes.push("msg-sticker");
+    }
+    if msg.is_channel_post {
+        classes.push("channel-post");
+    }
+
     let class_attr = classes.join(" ");
     let mut html = String::with_capacity(512);
     let _ = writeln!(html, "<div class=\"{class_attr}\" id=\"{anchor}\">");
 
-    if ctx.show_avatar && !msg.is_outgoing {
-        let sender_id = msg.sender_id.unwrap_or(msg.key.peer_id);
-        let sender_name = msg.sender_name.as_deref().unwrap_or("User");
-        let avatar_html = render_avatar_markup(
-            Some(sender_id),
-            sender_name,
-            2,
-            false,
-            "avatar",
-            available_avatars,
-        );
-        let _ = writeln!(html, "  {avatar_html}");
-    } else if !msg.is_outgoing {
-        html.push_str("  <div class=\"avatar avatar-placeholder\"></div>\n");
+    if !msg.is_channel_post {
+        if ctx.show_avatar && !msg.is_outgoing {
+            let sender_id = msg.sender_id.unwrap_or(msg.key.peer_id);
+            let sender_name = msg.sender_name.as_deref().unwrap_or("User");
+            let avatar_html = render_avatar_markup(
+                Some(sender_id),
+                sender_name,
+                2,
+                false,
+                "avatar",
+                available_avatars,
+            );
+            let _ = writeln!(html, "  {avatar_html}");
+        } else if !msg.is_outgoing {
+            html.push_str("  <div class=\"avatar avatar-placeholder\"></div>\n");
+        }
     }
 
     html.push_str("  <div class=\"message-bubble\">\n");
 
     if ctx.show_sender
         && !msg.is_outgoing
+        && !msg.is_channel_post
         && let Some(name) = &msg.sender_name
     {
         let _ = writeln!(
@@ -160,9 +175,15 @@ fn render_telegram_like(
         html.push_str("    </div>\n");
     }
 
+    let text_cls = if !msg.media_items.is_empty() {
+        "message-text message-caption"
+    } else {
+        "message-text"
+    };
+
     if let Some(text_html) = &msg.formatted_html {
         if !text_html.is_empty() {
-            let _ = writeln!(html, "    <div class=\"message-text\">{text_html}</div>");
+            let _ = writeln!(html, "    <div class=\"{text_cls}\">{text_html}</div>");
         }
     } else if let Some(raw) = &msg.raw_text
         && !raw.is_empty()
@@ -170,7 +191,7 @@ fn render_telegram_like(
     {
         let _ = writeln!(
             html,
-            "    <div class=\"message-text\">{}</div>",
+            "    <div class=\"{text_cls}\">{}</div>",
             html_escape(raw).replace('\n', "<br>")
         );
     }
@@ -206,6 +227,17 @@ fn render_telegram_like(
     );
     html.push_str("    </div>\n");
 
+    if let Some(count) = msg.comments_count {
+        let _ = writeln!(
+            html,
+            "    <div class=\"channel-comments-bar\"><span class=\"comments-icon\">💬</span> <span class=\"comments-label\">{} comment{}</span></div>",
+            count,
+            if count == 1 { "" } else { "s" }
+        );
+    } else if msg.has_comments {
+        html.push_str("    <div class=\"channel-comments-bar\"><span class=\"comments-icon\">💬</span> <span class=\"comments-label\">Leave a comment</span></div>\n");
+    }
+
     html.push_str("  </div>\n");
     html.push_str("</div>\n");
     html
@@ -237,6 +269,9 @@ fn render_album_telegram_like(
     if ctx.is_last_in_group {
         classes.push("group-last");
     }
+    if primary_msg.is_channel_post {
+        classes.push("channel-post");
+    }
 
     let class_attr = classes.join(" ");
     let mut html = String::with_capacity(1024);
@@ -250,26 +285,29 @@ fn render_album_telegram_like(
         );
     }
 
-    if ctx.show_avatar && !primary_msg.is_outgoing {
-        let sender_id = primary_msg.sender_id.unwrap_or(primary_msg.key.peer_id);
-        let sender_name = primary_msg.sender_name.as_deref().unwrap_or("User");
-        let avatar_html = render_avatar_markup(
-            Some(sender_id),
-            sender_name,
-            2,
-            false,
-            "avatar",
-            available_avatars,
-        );
-        let _ = writeln!(html, "  {avatar_html}");
-    } else if !primary_msg.is_outgoing {
-        html.push_str("  <div class=\"avatar avatar-placeholder\"></div>\n");
+    if !primary_msg.is_channel_post {
+        if ctx.show_avatar && !primary_msg.is_outgoing {
+            let sender_id = primary_msg.sender_id.unwrap_or(primary_msg.key.peer_id);
+            let sender_name = primary_msg.sender_name.as_deref().unwrap_or("User");
+            let avatar_html = render_avatar_markup(
+                Some(sender_id),
+                sender_name,
+                2,
+                false,
+                "avatar",
+                available_avatars,
+            );
+            let _ = writeln!(html, "  {avatar_html}");
+        } else if !primary_msg.is_outgoing {
+            html.push_str("  <div class=\"avatar avatar-placeholder\"></div>\n");
+        }
     }
 
     html.push_str("  <div class=\"message-bubble album-bubble-container\">\n");
 
     if ctx.show_sender
         && !primary_msg.is_outgoing
+        && !primary_msg.is_channel_post
         && let Some(name) = &primary_msg.sender_name
     {
         let _ = writeln!(
@@ -374,6 +412,17 @@ fn render_album_telegram_like(
         "      <time datetime=\"{full_time}\" title=\"{full_time}\" class=\"meta-time\">{short_time}</time>"
     );
     html.push_str("    </div>\n");
+
+    if let Some(count) = primary_msg.comments_count {
+        let _ = writeln!(
+            html,
+            "    <div class=\"channel-comments-bar\"><span class=\"comments-icon\">💬</span> <span class=\"comments-label\">{} comment{}</span></div>",
+            count,
+            if count == 1 { "" } else { "s" }
+        );
+    } else if primary_msg.has_comments {
+        html.push_str("    <div class=\"channel-comments-bar\"><span class=\"comments-icon\">💬</span> <span class=\"comments-label\">Leave a comment</span></div>\n");
+    }
 
     html.push_str("  </div>\n");
     html.push_str("</div>\n");
