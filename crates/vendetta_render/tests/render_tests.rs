@@ -3798,3 +3798,146 @@ fn test_channel_title_and_post_rendering() {
         "HTML verification must pass with 0 errors"
     );
 }
+
+#[test]
+fn test_multiple_reactions() {
+    use vendetta_render::message::reactions::render_message_reactions;
+    use vendetta_render::model::{RenderReactionGroup, RenderReactionKey};
+
+    let groups = vec![
+        RenderReactionGroup {
+            reaction: RenderReactionKey::Emoji("👍".to_string()),
+            count: 3,
+            is_chosen_by_me: false,
+            reactors: vec![],
+        },
+        RenderReactionGroup {
+            reaction: RenderReactionKey::Emoji("❤️".to_string()),
+            count: 2,
+            is_chosen_by_me: false,
+            reactors: vec![],
+        },
+        RenderReactionGroup {
+            reaction: RenderReactionKey::Emoji("🔥".to_string()),
+            count: 1,
+            is_chosen_by_me: false,
+            reactors: vec![],
+        },
+    ];
+
+    let html = render_message_reactions(&groups);
+    let badge_count = html.matches("class=\"reaction-badge").count();
+    assert_eq!(
+        badge_count, 3,
+        "Must render exactly 3 distinct reaction badges"
+    );
+    assert!(html.contains("👍"), "Must contain 👍");
+    assert!(html.contains("❤️"), "Must contain ❤️");
+    assert!(html.contains("🔥"), "Must contain 🔥");
+    assert!(
+        !html.contains("👍❤️🔥"),
+        "Must not concatenate emojis into one text node"
+    );
+}
+
+#[test]
+fn test_zwj_reactions() {
+    use vendetta_render::message::reactions::render_message_reactions;
+    use vendetta_render::model::{RenderReactionGroup, RenderReactionKey};
+
+    let groups = vec![
+        RenderReactionGroup {
+            reaction: RenderReactionKey::Emoji("❤‍🔥".to_string()),
+            count: 2,
+            is_chosen_by_me: false,
+            reactors: vec![],
+        },
+        RenderReactionGroup {
+            reaction: RenderReactionKey::Emoji("🔥".to_string()),
+            count: 1,
+            is_chosen_by_me: false,
+            reactors: vec![],
+        },
+    ];
+
+    let html = render_message_reactions(&groups);
+    let badge_count = html.matches("class=\"reaction-badge").count();
+    assert_eq!(
+        badge_count, 2,
+        "Must render exactly 2 distinct reaction badges for ZWJ and standard emoji"
+    );
+    assert!(
+        html.contains("<span class=\"reaction-emoji\">\u{2764}\u{fe0f}\u{200d}\u{1f525}</span>")
+    );
+    assert!(html.contains("<span class=\"reaction-emoji\">🔥</span>"));
+}
+
+#[test]
+fn test_custom_emoji_f() {
+    use vendetta_render::message::reactions::render_message_reactions;
+    use vendetta_render::model::{RenderReactionGroup, RenderReactionKey};
+
+    let groups = vec![
+        RenderReactionGroup {
+            reaction: RenderReactionKey::CustomEmoji {
+                document_id: 123456789,
+                alt_text: Some("Cool Custom".to_string()),
+                asset_rel_path: Some("../../media/reactions/123456789.webp".to_string()),
+            },
+            count: 4,
+            is_chosen_by_me: false,
+            reactors: vec![],
+        },
+        RenderReactionGroup {
+            reaction: RenderReactionKey::CustomEmoji {
+                document_id: 987654321,
+                alt_text: None,
+                asset_rel_path: None,
+            },
+            count: 1,
+            is_chosen_by_me: false,
+            reactors: vec![],
+        },
+    ];
+
+    let html = render_message_reactions(&groups);
+    assert!(
+        html.contains("<img src=\"../../media/reactions/123456789.webp\" alt=\"Cool Custom\" class=\"reaction-custom-icon\" loading=\"lazy\">"),
+        "Custom reaction with asset must render img tag"
+    );
+    assert!(
+        html.contains("<span class=\"reaction-custom-fallback\" title=\"Custom reaction #987654321\">✨</span>"),
+        "Custom reaction without asset must render truthful fallback"
+    );
+    assert!(
+        !html.contains("987654321</span>"),
+        "Must not render raw document ID as text"
+    );
+}
+
+#[test]
+fn test_per_reaction_count() {
+    use vendetta_render::message::reactions::render_message_reactions;
+    use vendetta_render::model::{RenderReactionGroup, RenderReactionKey};
+
+    let groups = vec![
+        RenderReactionGroup {
+            reaction: RenderReactionKey::Paid,
+            count: 7,
+            is_chosen_by_me: false,
+            reactors: vec![],
+        },
+        RenderReactionGroup {
+            reaction: RenderReactionKey::Emoji("🍓".to_string()),
+            count: 42,
+            is_chosen_by_me: false,
+            reactors: vec![],
+        },
+    ];
+
+    let html = render_message_reactions(&groups);
+    assert!(html.contains("<span class=\"reaction-count\">7</span>"));
+    assert!(html.contains("<span class=\"reaction-count\">42</span>"));
+    assert!(html.contains("⭐"));
+    assert!(!html.contains("Paid</span>"));
+}

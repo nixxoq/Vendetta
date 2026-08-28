@@ -12,7 +12,10 @@ use crate::{
         reactions::render_message_reactions,
         service::{format_short_time, render_service_message},
     },
-    model::{PresentationMode, RenderAlbum, RenderItem, RenderMessage, RenderReactionKey},
+    model::{
+        PresentationMode, RenderAlbum, RenderItem, RenderMessage, RenderReactionGroup,
+        RenderReactionKey,
+    },
     reply::render_reply_card,
     url_builder::{ArchiveUrlBuilder, render_avatar_markup},
 };
@@ -376,12 +379,7 @@ fn render_album_telegram_like(
         }
     }
 
-    let album_reactions: Vec<_> = album
-        .messages
-        .iter()
-        .flat_map(|m| &m.reactions)
-        .cloned()
-        .collect();
+    let album_reactions = aggregate_album_reactions(&album.messages);
     if !album_reactions.is_empty() {
         html.push_str(&render_message_reactions(&album_reactions));
     }
@@ -605,4 +603,28 @@ fn render_archive_optimized(msg: &RenderMessage) -> String {
     html.push_str("\n  </div>\n");
     html.push_str("</div>\n");
     html
+}
+
+pub fn aggregate_album_reactions(messages: &[RenderMessage]) -> Vec<RenderReactionGroup> {
+    let mut groups: Vec<RenderReactionGroup> = Vec::new();
+    for msg in messages {
+        for rx in &msg.reactions {
+            if let Some(existing) = groups.iter_mut().find(|g| g.reaction == rx.reaction) {
+                existing.count += rx.count;
+                existing.is_chosen_by_me |= rx.is_chosen_by_me;
+                for reactor in &rx.reactors {
+                    if !existing
+                        .reactors
+                        .iter()
+                        .any(|r| r.peer_id == reactor.peer_id)
+                    {
+                        existing.reactors.push(reactor.clone());
+                    }
+                }
+            } else {
+                groups.push(rx.clone());
+            }
+        }
+    }
+    groups
 }

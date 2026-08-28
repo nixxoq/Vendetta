@@ -284,6 +284,9 @@ fn parse_reaction_key(val: Option<&serde_json::Value>) -> ReactionKey {
         return ReactionKey::Paid;
     }
     if let Some(s) = v.as_str() {
+        if s == "Paid" {
+            return ReactionKey::Paid;
+        }
         return ReactionKey::Emoji(s.to_string());
     }
 
@@ -343,5 +346,39 @@ mod tests {
         );
         assert_eq!(parsed.recent_reactors.len(), 1);
         assert_eq!(parsed.recent_reactors[0].peer_id, PeerId::new(12345));
+    }
+
+    #[test]
+    fn test_combining_paid_and_zwj_reactions() {
+        let json_str = r#"{
+            "Reactions": {
+                "min": false,
+                "can_see_list": false,
+                "reactions_as_tags": false,
+                "results": [
+                    { "Count": { "chosen_order": null, "reaction": "Paid", "count": 1 } },
+                    { "Count": { "chosen_order": null, "reaction": { "Emoji": { "emoticon": "❤‍🔥" } }, "count": 2 } },
+                    { "Count": { "chosen_order": null, "reaction": { "Emoji": { "emoticon": "🍓" } }, "count": 3 } }
+                ],
+                "recent_reactions": null,
+                "top_reactors": null
+            }
+        }"#;
+
+        let parsed =
+            parse_reactions_json(json_str).expect("should parse valid reactions with Paid and ZWJ");
+        assert_eq!(parsed.results.len(), 3);
+        assert_eq!(parsed.results[0].reaction, ReactionKey::Paid);
+        assert_eq!(parsed.results[0].count, 1);
+        assert_eq!(
+            parsed.results[1].reaction,
+            ReactionKey::Emoji("❤‍🔥".to_string())
+        );
+        assert_eq!(parsed.results[1].count, 2);
+        assert_eq!(
+            parsed.results[2].reaction,
+            ReactionKey::Emoji("🍓".to_string())
+        );
+        assert_eq!(parsed.results[2].count, 3);
     }
 }
