@@ -64,12 +64,37 @@ pub fn render_media_card(item: &RenderMediaItem) -> String {
                 html_escape(&size)
             )
         }
-        MediaKind::Sticker => format!(
-            r##"<div class="media-card media-sticker">
+        MediaKind::Sticker => {
+            let mime = item.record.mime_type.as_deref().unwrap_or("");
+            let file_name = item.record.file_name.as_deref().unwrap_or("");
+
+            if mime == "video/webm" || file_name.ends_with(".webm") {
+                format!(
+                    r##"<div class="media-card media-sticker">
+  <video class="sticker-video" autoplay loop muted playsinline>
+    <source src="{safe_url}" type="video/webm">
+  </video>
+</div>
+"##
+                )
+            } else if mime == "application/x-tgsticker" || file_name.ends_with(".tgs") {
+                format!(
+                    r##"<div class="media-card media-sticker">
+  <canvas class="sticker-canvas" data-tgs-url="{safe_url}" width="192" height="192" aria-label="Animated Sticker">
+    <div class="sticker-fallback"><svg class="icon"><use href="#icon-sticker"></use></svg><span>Sticker</span></div>
+  </canvas>
+</div>
+"##
+                )
+            } else {
+                format!(
+                    r##"<div class="media-card media-sticker">
   <img src="{safe_url}" alt="Sticker" loading="lazy" class="sticker-img">
 </div>
 "##
-        ),
+                )
+            }
+        }
         _ => {
             let filename = item.record.file_name.as_deref().unwrap_or("Attachment");
             let mime = item

@@ -141,14 +141,15 @@ impl StartupReconciler {
                 let path = entry.path();
                 if path.extension().is_some_and(|e| e == "part")
                     && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-                    && self.db.get_media(stem)?.is_none() {
-                        debug!(
-                            "Startup reconciliation (Case E): Removing orphan .part file {:?}",
-                            path
-                        );
-                        let _ = fs::remove_file(&path);
-                        report.orphan_part_cleaned_count += 1;
-                    }
+                    && self.db.get_media(stem)?.is_none()
+                {
+                    debug!(
+                        "Startup reconciliation (Case E): Removing orphan .part file {:?}",
+                        path
+                    );
+                    let _ = fs::remove_file(&path);
+                    report.orphan_part_cleaned_count += 1;
+                }
             }
         }
 

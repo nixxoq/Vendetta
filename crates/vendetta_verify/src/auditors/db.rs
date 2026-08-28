@@ -571,8 +571,9 @@ pub fn audit_revisions(ctx: &DatabaseAuditContext) -> VerificationResult<Vec<Ver
             }
 
             if let (Some(l_date), Some(c_date)) = (last_edit_date, edit_date)
-                && c_date < l_date {
-                    findings.push(VerificationFinding {
+                && c_date < l_date
+            {
+                findings.push(VerificationFinding {
                         code: "REVISION_ORDER_INVALID".to_string(),
                         severity: FindingSeverity::Error,
                         category: FindingCategory::Revision,
@@ -589,7 +590,7 @@ pub fn audit_revisions(ctx: &DatabaseAuditContext) -> VerificationResult<Vec<Ver
                         })),
                         recommendation: Some("Verify edit_date timestamps in message revision history.".to_string()),
                     });
-                }
+            }
 
             last_rev_id = rev_id;
             last_edit_date = edit_date;
@@ -598,27 +599,28 @@ pub fn audit_revisions(ctx: &DatabaseAuditContext) -> VerificationResult<Vec<Ver
         if let Some(json_str) = entities_json
             .as_deref()
             .filter(|s| !s.is_empty() && *s != "[]")
-            && let Err(e) = serde_json::from_str::<serde_json::Value>(json_str) {
-                findings.push(VerificationFinding {
-                    code: "ENTITIES_JSON_MALFORMED".to_string(),
-                    severity: FindingSeverity::Error,
-                    category: FindingCategory::Entity,
-                    peer_id: Some(pid),
-                    message_id: Some(mid),
-                    media_id: None,
-                    path: None,
-                    description: format!(
-                        "Malformed entities_json in revision {rev_id} of ({pid}, {mid}): {e}"
-                    ),
-                    evidence: Some(serde_json::json!({
-                        "peer_id": pid,
-                        "message_id": mid,
-                        "revision_id": rev_id,
-                        "raw_json": json_str
-                    })),
-                    recommendation: Some("Sanitize JSON syntax in message_revisions.".to_string()),
-                });
-            }
+            && let Err(e) = serde_json::from_str::<serde_json::Value>(json_str)
+        {
+            findings.push(VerificationFinding {
+                code: "ENTITIES_JSON_MALFORMED".to_string(),
+                severity: FindingSeverity::Error,
+                category: FindingCategory::Entity,
+                peer_id: Some(pid),
+                message_id: Some(mid),
+                media_id: None,
+                path: None,
+                description: format!(
+                    "Malformed entities_json in revision {rev_id} of ({pid}, {mid}): {e}"
+                ),
+                evidence: Some(serde_json::json!({
+                    "peer_id": pid,
+                    "message_id": mid,
+                    "revision_id": rev_id,
+                    "raw_json": json_str
+                })),
+                recommendation: Some("Sanitize JSON syntax in message_revisions.".to_string()),
+            });
+        }
     }
 
     Ok(findings)
@@ -766,9 +768,10 @@ fn extract_bounds(item: &serde_json::Value) -> (Option<i64>, Option<i64>) {
                 && let (Some(off), Some(len)) = (
                     inner_obj.get("offset").and_then(|v| v.as_i64()),
                     inner_obj.get("length").and_then(|v| v.as_i64()),
-                ) {
-                    return (Some(off), Some(len));
-                }
+                )
+            {
+                return (Some(off), Some(len));
+            }
         }
     }
     (None, None)
@@ -1536,16 +1539,17 @@ pub fn audit_media(
     }
 
     if let Some(root_dir) = media_root_dir
-        && root_dir.exists() {
-            scan_orphan_files(
-                root_dir,
-                root_dir,
-                &known_rel_paths,
-                &active_downloading_paths,
-                &mut findings,
-                &mut metrics,
-            )?;
-        }
+        && root_dir.exists()
+    {
+        scan_orphan_files(
+            root_dir,
+            root_dir,
+            &known_rel_paths,
+            &active_downloading_paths,
+            &mut findings,
+            &mut metrics,
+        )?;
+    }
 
     Ok((findings, metrics))
 }

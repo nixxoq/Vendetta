@@ -33,9 +33,10 @@ impl RepairPlanner {
                     });
 
                     if let Some(path) = &f.path
-                        && is_safe {
-                            orphan_part_paths.push(path.clone());
-                        }
+                        && is_safe
+                    {
+                        orphan_part_paths.push(path.clone());
+                    }
                 }
                 "ORPHAN_MEDIA_FILE" => {
                     if let Some(path) = &f.path {

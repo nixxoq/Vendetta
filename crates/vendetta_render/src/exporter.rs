@@ -143,13 +143,18 @@ impl<'a> HtmlArchiveExporter<'a> {
 
             let last_date = self.db.get_last_message_date_by_peer(peer.peer_id)?;
 
+            let authoritative_name = self
+                .resolve_authoritative_title(peer.peer_id)
+                .unwrap_or_else(|_| {
+                    peer.name
+                        .clone()
+                        .unwrap_or_else(|| format!("Chat {}", peer.peer_id.raw()))
+                });
+
             render_peers.push(RenderPeer {
                 peer_id: peer.peer_id,
                 peer_type: peer.peer_type,
-                name: peer
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("Chat {}", peer.peer_id.raw())),
+                name: authoritative_name,
                 username: peer.username.clone(),
                 phone: peer.phone.clone(),
                 total_messages: count,
@@ -388,6 +393,64 @@ impl<'a> HtmlArchiveExporter<'a> {
         Ok(summary)
     }
 
+    pub fn resolve_authoritative_title(&self, peer_id: PeerId) -> RenderResult<String> {
+        if let Some(peer) = self.db.get_peer(peer_id).ok().flatten() {
+            if let Some(name) = &peer.name {
+                let trimmed = name.trim();
+                if !trimmed.is_empty() && trimmed != "Unknown" {
+                    return Ok(trimmed.to_string());
+                }
+            }
+
+            // i added two fallbacks cuz mtproto sucks:
+
+            // First, retrieve chat/group/user title directly from Raw TL
+            if let Some(ref raw) = peer.raw_tl {
+                if let Ok(tl::enums::Chat::Channel(c)) = tl::enums::Chat::from_bytes(raw) {
+                    let t = c.title.trim();
+                    if !t.is_empty() && t != "Unknown" {
+                        return Ok(t.to_string());
+                    }
+                } else if let Ok(tl::enums::Chat::Chat(c)) = tl::enums::Chat::from_bytes(raw) {
+                    let t = c.title.trim();
+                    if !t.is_empty() && t != "Unknown" {
+                        return Ok(t.to_string());
+                    }
+                } else if let Ok(tl::enums::User::User(u)) = tl::enums::User::from_bytes(raw) {
+                    let full = match (&u.first_name, &u.last_name) {
+                        (Some(f), Some(l)) => format!("{f} {l}"),
+                        (Some(f), None) => f.clone(),
+                        (None, Some(l)) => l.clone(),
+                        (None, None) => u.username.clone().unwrap_or_default(),
+                    };
+                    let trimmed = full.trim();
+                    if !trimmed.is_empty() && trimmed != "Unknown" {
+                        return Ok(trimmed.to_string());
+                    }
+                }
+            }
+
+            // If not, use fucking username
+            if let Some(uname) = &peer.username {
+                let u = uname.trim();
+                if !u.is_empty() {
+                    return Ok(format!("@{u}"));
+                }
+            }
+        }
+
+        // Oh yeah, i cooked cringe fallback, but it works lol
+        // for channels only
+        if let Ok(Some(title)) = self.db.find_creation_or_title_change(peer_id) {
+            let t = title.trim();
+            if !t.is_empty() && t != "Unknown" {
+                return Ok(t.to_string());
+            }
+        }
+
+        Ok(format!("Chat {}", peer_id.raw()))
+    }
+
     fn build_render_message(
         &self,
         msg: &MessageRecord,
@@ -395,31 +458,53 @@ impl<'a> HtmlArchiveExporter<'a> {
         available_avatars: &HashSet<PeerId>,
         exported_peer_ids: &HashSet<PeerId>,
     ) -> RenderResult<RenderMessage> {
-        let sender_name = if let Some(sid) = msg.sender_id {
-            self.db
-                .get_peer(sid)
-                .ok()
-                .flatten()
-                .and_then(|p| p.name)
-                .unwrap_or_else(|| format!("User {}", sid.raw()))
+        let current_peer = self.db.get_peer(msg.key.peer_id).ok().flatten();
+        let is_channel = current_peer
+            .as_ref()
+            .map(|p| p.peer_type == PeerType::Channel)
+            .unwrap_or(false);
+
+        let (sender_name, is_channel_post) = if let Some(sid) = msg.sender_id {
+            let name = self
+                .resolve_authoritative_title(sid)
+                .unwrap_or_else(|_| format!("User {}", sid.raw()));
+            (Some(name), false)
+        } else if is_channel {
+            // In broadcast channels, sender is the channel itself!
+            let name = self
+                .resolve_authoritative_title(msg.key.peer_id)
+                .unwrap_or_else(|_| format!("Channel {}", msg.key.peer_id.raw()));
+            (Some(name), true)
         } else {
-            "Unknown".to_string()
+            (None, false)
         };
 
         let mut is_service = false;
         let mut service_description = None;
+        let mut author_signature = None;
+        let mut comments_count = None;
+        let mut has_comments = false;
 
-        if let Some(ref raw) = msg.raw_tl
-            && let Ok(tl::enums::Message::Service(s)) = tl::enums::Message::from_bytes(raw)
-        {
-            is_service = true;
-            service_description = if let Some(t) = &msg.text
-                && !t.trim().is_empty()
-            {
-                Some(t.clone())
-            } else {
-                Some(format_service_action(&s.action))
-            };
+        // get comments (replies) from channel
+        if let Some(ref raw) = msg.raw_tl {
+            if let Ok(tl::enums::Message::Service(s)) = tl::enums::Message::from_bytes(raw) {
+                is_service = true;
+                service_description = if let Some(t) = &msg.text
+                    && !t.trim().is_empty()
+                {
+                    Some(t.clone())
+                } else {
+                    Some(format_service_action(&s.action))
+                };
+            } else if let Ok(tl::enums::Message::Message(m)) = tl::enums::Message::from_bytes(raw) {
+                author_signature = m.post_author;
+                if let Some(tl::enums::MessageReplies::Replies(r)) = m.replies {
+                    has_comments = r.comments;
+                    if r.replies > 0 {
+                        comments_count = Some(r.replies);
+                    }
+                }
+            }
         }
 
         let formatted_html = msg
@@ -540,7 +625,7 @@ impl<'a> HtmlArchiveExporter<'a> {
             key: msg.key,
             date: msg.date,
             sender_id: msg.sender_id,
-            sender_name: Some(sender_name),
+            sender_name,
             is_outgoing: false,
             state: msg.state,
             formatted_html,
@@ -554,9 +639,12 @@ impl<'a> HtmlArchiveExporter<'a> {
             service_description,
             views: msg.views,
             forwards_count: msg.forwards_count,
-            author_signature: None,
+            author_signature,
             reply_to_top_id: msg.reply_to_top_id,
             reactions,
+            is_channel_post,
+            comments_count,
+            has_comments,
         })
     }
 

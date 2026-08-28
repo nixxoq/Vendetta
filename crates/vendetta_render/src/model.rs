@@ -212,6 +212,9 @@ pub struct RenderMessage {
     pub author_signature: Option<String>,
     pub reply_to_top_id: Option<MessageId>,
     pub reactions: Vec<RenderReactionGroup>,
+    pub is_channel_post: bool,
+    pub comments_count: Option<i32>,
+    pub has_comments: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]

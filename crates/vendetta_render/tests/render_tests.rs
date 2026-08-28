@@ -230,6 +230,9 @@ fn archive_optimized_renders_accessible_media_links() {
         author_signature: None,
         reply_to_top_id: None,
         reactions: vec![],
+        is_channel_post: false,
+        comments_count: None,
+        has_comments: false,
     };
 
     let dense_html = render_message_bubble(
@@ -3413,4 +3416,385 @@ fn empty_dialogs_are_filtered_from_export() {
     let index_scoped = fs::read_to_string(out_dir_scoped.join("index.html")).unwrap();
     assert!(index_scoped.contains("Alpha Chat"));
     assert!(!index_scoped.contains("Beta Channel"));
+}
+
+#[test]
+fn test_channel_title_and_post_rendering() {
+    use grammers_tl_types::{self as tl, Serializable};
+    use vendetta_model::{
+        MediaDownloadStatus, MediaKind, MediaRecord, MediaRole, MediaVerificationStatus,
+        MessageMediaJoin,
+    };
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("archive.db");
+    let db = ArchiveDb::open(&db_path).unwrap();
+
+    let media_dir = dir.path().join("media");
+    let avatars_dir = media_dir.join("avatars");
+    fs::create_dir_all(&avatars_dir).unwrap();
+
+    let channel_peer_id = PeerId::new(-1003412444041);
+
+    let chan_tl = tl::types::Channel {
+        creator: false,
+        left: false,
+        broadcast: true,
+        verified: false,
+        megagroup: false,
+        restricted: false,
+        signatures: true,
+        min: false,
+        scam: false,
+        has_link: false,
+        has_geo: false,
+        slowmode_enabled: false,
+        call_active: false,
+        call_not_empty: false,
+        fake: false,
+        gigagroup: false,
+        noforwards: false,
+        join_to_send: false,
+        join_request: false,
+        forum: false,
+        stories_hidden: false,
+        stories_hidden_min: false,
+        stories_unavailable: false,
+        signature_profiles: false,
+        autotranslation: false,
+        broadcast_messages_allowed: false,
+        monoforum: false,
+        forum_tabs: false,
+        id: 3412444041,
+        access_hash: Some(12345),
+        title: "Ну типа....".to_string(),
+        username: None,
+        photo: tl::enums::ChatPhoto::Empty,
+        date: 1764865000,
+        restriction_reason: None,
+        admin_rights: None,
+        banned_rights: None,
+        default_banned_rights: None,
+        participants_count: Some(42),
+        usernames: None,
+        stories_max_id: None,
+        color: None,
+        profile_color: None,
+        emoji_status: None,
+        level: None,
+        subscription_until_date: None,
+        bot_verification_icon: None,
+        send_paid_messages_stars: None,
+        linked_monoforum_id: None,
+        linked_community_id: None,
+    };
+    let raw_chat = tl::enums::Chat::Channel(chan_tl).to_bytes();
+
+    let peer = PeerRecord {
+        peer_id: channel_peer_id,
+        peer_type: PeerType::Channel,
+        name: Some("Ну типа....".to_string()),
+        username: None,
+        phone: None,
+        raw_tl: Some(raw_chat),
+        updated_at: 1787900000,
+    };
+    db.upsert_peer(&peer).unwrap();
+    fs::write(
+        avatars_dir.join("p_neg_1003412444041.jpg"),
+        b"CHANNEL_AVATAR",
+    )
+    .unwrap();
+
+    let srv_msg = MessageRecord {
+        key: MessageKey::new(channel_peer_id, MessageId::new(1)),
+        date: 1764865118,
+        sender_id: None,
+        text: Some("Created channel: \"Ну типа....\"".to_string()),
+        entities_json: None,
+        edit_date: None,
+        state: MessageState::Active,
+        reply_to_msg_id: None,
+        reply_to_top_id: None,
+        reply_to_peer_id: None,
+        grouped_id: None,
+        forward_json: None,
+        reactions_json: None,
+        views: None,
+        forwards_count: None,
+        raw_tl: None,
+    };
+    db.insert_messages_batch(&[srv_msg]).unwrap();
+
+    let post_msg = MessageRecord {
+        key: MessageKey::new(channel_peer_id, MessageId::new(80)),
+        date: 1785869329,
+        sender_id: None,
+        text: Some("ААААААААААААААААААААА".to_string()),
+        entities_json: None,
+        edit_date: Some(1785869400),
+        state: MessageState::Edited,
+        reply_to_msg_id: None,
+        reply_to_top_id: None,
+        reply_to_peer_id: None,
+        grouped_id: None,
+        forward_json: None,
+        reactions_json: None,
+        views: Some(14),
+        forwards_count: Some(2),
+        raw_tl: None,
+    };
+    db.insert_messages_batch(&[post_msg]).unwrap();
+
+    let video_rel = "media/videos/lesson.mp4";
+    let abs_video = media_dir.join(video_rel);
+    fs::create_dir_all(abs_video.parent().unwrap()).unwrap();
+    fs::write(&abs_video, b"MP4_VIDEO_BYTES").unwrap();
+
+    let video_rec = MediaRecord {
+        media_id: "doc_video_80".to_string(),
+        kind: MediaKind::Video,
+        mime_type: Some("video/mp4".to_string()),
+        size_bytes: Some(15),
+        file_name: Some("lesson.mp4".to_string()),
+        size_type: None,
+        width: Some(1280),
+        height: Some(720),
+        dc_id: 2,
+        source_location_tl: None,
+        file_reference: None,
+        local_rel_path: Some(video_rel.to_string()),
+        sha256: None,
+        download_status: MediaDownloadStatus::Completed,
+        downloaded_bytes: 15,
+        chunk_size: 524288,
+        retry_count: 0,
+        max_retries: 5,
+        next_retry_at: None,
+        claimed_at: None,
+        worker_id: None,
+        last_error: None,
+        filter_decision: None,
+        filter_reason: None,
+        policy_version: 1,
+        verification_status: MediaVerificationStatus::Verified,
+        created_at: 1785869329,
+        updated_at: 1785869329,
+    };
+    db.insert_or_update_media(&video_rec).unwrap();
+    db.link_message_media(&MessageMediaJoin {
+        key: MessageKey::new(channel_peer_id, MessageId::new(80)),
+        media_id: "doc_video_80".to_string(),
+        role: MediaRole::Attachment,
+        position: 0,
+    })
+    .unwrap();
+
+    let sticker_msg = MessageRecord {
+        key: MessageKey::new(channel_peer_id, MessageId::new(93)),
+        date: 1787578439,
+        sender_id: None,
+        text: None,
+        entities_json: None,
+        edit_date: None,
+        state: MessageState::Active,
+        reply_to_msg_id: None,
+        reply_to_top_id: None,
+        reply_to_peer_id: None,
+        grouped_id: None,
+        forward_json: None,
+        reactions_json: None,
+        views: Some(11),
+        forwards_count: None,
+        raw_tl: None,
+    };
+    db.insert_messages_batch(&[sticker_msg]).unwrap();
+
+    let sticker_rel = "media/stickers/sticker.webm";
+    let abs_sticker = media_dir.join(sticker_rel);
+    fs::create_dir_all(abs_sticker.parent().unwrap()).unwrap();
+    fs::write(&abs_sticker, b"WEBM_STICKER_BYTES").unwrap();
+
+    let sticker_rec = MediaRecord {
+        media_id: "doc_sticker_93".to_string(),
+        kind: MediaKind::Sticker,
+        mime_type: Some("video/webm".to_string()),
+        size_bytes: Some(18),
+        file_name: Some("sticker.webm".to_string()),
+        size_type: None,
+        width: Some(512),
+        height: Some(512),
+        dc_id: 2,
+        source_location_tl: None,
+        file_reference: None,
+        local_rel_path: Some(sticker_rel.to_string()),
+        sha256: None,
+        download_status: MediaDownloadStatus::Completed,
+        downloaded_bytes: 18,
+        chunk_size: 524288,
+        retry_count: 0,
+        max_retries: 5,
+        next_retry_at: None,
+        claimed_at: None,
+        worker_id: None,
+        last_error: None,
+        filter_decision: None,
+        filter_reason: None,
+        policy_version: 1,
+        verification_status: MediaVerificationStatus::Verified,
+        created_at: 1787578439,
+        updated_at: 1787578439,
+    };
+    db.insert_or_update_media(&sticker_rec).unwrap();
+    db.link_message_media(&MessageMediaJoin {
+        key: MessageKey::new(channel_peer_id, MessageId::new(93)),
+        media_id: "doc_sticker_93".to_string(),
+        role: MediaRole::Sticker,
+        position: 0,
+    })
+    .unwrap();
+
+    let tgs_msg = MessageRecord {
+        key: MessageKey::new(channel_peer_id, MessageId::new(94)),
+        date: 1787578500,
+        sender_id: None,
+        text: None,
+        entities_json: None,
+        edit_date: None,
+        state: MessageState::Active,
+        reply_to_msg_id: None,
+        reply_to_top_id: None,
+        reply_to_peer_id: None,
+        grouped_id: None,
+        forward_json: None,
+        reactions_json: None,
+        views: Some(15),
+        forwards_count: None,
+        raw_tl: None,
+    };
+    db.insert_messages_batch(&[tgs_msg]).unwrap();
+
+    let tgs_rel = "media/stickers/animated.tgs";
+    let abs_tgs = media_dir.join(tgs_rel);
+    fs::create_dir_all(abs_tgs.parent().unwrap()).unwrap();
+    fs::write(&abs_tgs, b"TGS_GZIP_BYTES").unwrap();
+
+    let tgs_rec = MediaRecord {
+        media_id: "doc_tgs_94".to_string(),
+        kind: MediaKind::Sticker,
+        mime_type: Some("application/x-tgsticker".to_string()),
+        size_bytes: Some(14),
+        file_name: Some("animated.tgs".to_string()),
+        size_type: None,
+        width: Some(512),
+        height: Some(512),
+        dc_id: 2,
+        source_location_tl: None,
+        file_reference: None,
+        local_rel_path: Some(tgs_rel.to_string()),
+        sha256: None,
+        download_status: MediaDownloadStatus::Completed,
+        downloaded_bytes: 14,
+        chunk_size: 524288,
+        retry_count: 0,
+        max_retries: 5,
+        next_retry_at: None,
+        claimed_at: None,
+        worker_id: None,
+        last_error: None,
+        filter_decision: None,
+        filter_reason: None,
+        policy_version: 1,
+        verification_status: MediaVerificationStatus::Verified,
+        created_at: 1787578500,
+        updated_at: 1787578500,
+    };
+    db.insert_or_update_media(&tgs_rec).unwrap();
+    db.link_message_media(&MessageMediaJoin {
+        key: MessageKey::new(channel_peer_id, MessageId::new(94)),
+        media_id: "doc_tgs_94".to_string(),
+        role: MediaRole::Sticker,
+        position: 0,
+    })
+    .unwrap();
+
+    let out_dir = dir.path().join("export_html");
+    let options = ExportOptions {
+        output_dir: out_dir.clone(),
+        presentation_mode: PresentationMode::TelegramLike,
+        media_mode: MediaMode::Copy,
+        theme: vendetta_render::ThemeMode::System,
+        chunk_size: 250,
+        replace: true,
+        media_src_dir: Some(media_dir),
+        include_service_messages: true,
+        include_deleted_messages: true,
+        include_edit_history: true,
+        build_search_index: true,
+        build_date_index: true,
+        target_peers: None,
+    };
+
+    let exporter = HtmlArchiveExporter::new(&db, options);
+    let summary = exporter.export().unwrap();
+    assert_eq!(summary.dialogs_count, 1);
+
+    let chat_page =
+        fs::read_to_string(out_dir.join("chats/p_neg_1003412444041/page_00001.html")).unwrap();
+
+    assert!(
+        chat_page.contains("<h2>Ну типа....</h2>"),
+        "Chat header must display Ну типа...."
+    );
+    assert!(
+        chat_page.contains("<span class=\"dialog-name\">Ну типа....</span>"),
+        "Sidebar must display Ну типа...."
+    );
+    assert!(
+        !chat_page.contains("<div class=\"message-sender\">Unknown</div>"),
+        "Must NOT contain Unknown senders"
+    );
+
+    assert!(
+        chat_page.contains("channel-post"),
+        "Post must have channel-post class"
+    );
+    assert!(
+        chat_page.contains("ААААААААААААААААААААА"),
+        "Post must render caption text"
+    );
+    assert!(
+        chat_page.contains("class=\"message-text message-caption\""),
+        "Caption must be attached"
+    );
+    assert!(
+        chat_page.contains("<span class=\"meta-views\">👁 14</span>"),
+        "Post must render views"
+    );
+
+    assert!(
+        chat_page.contains("<video class=\"sticker-video\" autoplay loop muted playsinline>"),
+        "WebM sticker must render as video"
+    );
+    assert!(
+        chat_page.contains("type=\"video/webm\""),
+        "WebM sticker video source must have video/webm type"
+    );
+    assert!(
+        chat_page.contains("msg-sticker"),
+        "Sticker message must have msg-sticker class"
+    );
+
+    assert!(
+        chat_page.contains("<canvas class=\"sticker-canvas\" data-tgs-url="),
+        "TGS sticker must render as canvas"
+    );
+
+    let verifier = HtmlArchiveVerifier::new(&out_dir);
+    let report = verifier.verify().unwrap();
+    assert_eq!(
+        report.errors.len(),
+        0,
+        "HTML verification must pass with 0 errors"
+    );
 }

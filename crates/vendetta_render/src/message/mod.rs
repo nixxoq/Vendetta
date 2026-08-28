@@ -116,12 +116,13 @@ pub fn compute_item_grouping_contexts(
 
         let is_first = !is_prev_same;
         let is_last = !is_next_same;
+        let is_channel = current_msg.is_channel_post;
 
         contexts.push(GroupingContext {
             is_first_in_group: is_first,
             is_last_in_group: is_last,
-            show_sender: is_first && is_group_chat && !current_msg.is_outgoing,
-            show_avatar: is_first && is_group_chat && !current_msg.is_outgoing,
+            show_sender: is_first && is_group_chat && !current_msg.is_outgoing && !is_channel,
+            show_avatar: is_first && is_group_chat && !current_msg.is_outgoing && !is_channel,
         });
     }
 
@@ -151,12 +152,13 @@ pub fn compute_grouping_contexts(
 
         let is_first = !is_prev_same;
         let is_last = !is_next_same;
+        let is_channel = current.is_channel_post;
 
         contexts.push(GroupingContext {
             is_first_in_group: is_first,
             is_last_in_group: is_last,
-            show_sender: is_first && is_group_chat && !current.is_outgoing,
-            show_avatar: is_first && is_group_chat && !current.is_outgoing,
+            show_sender: is_first && is_group_chat && !current.is_outgoing && !is_channel,
+            show_avatar: is_first && is_group_chat && !current.is_outgoing && !is_channel,
         });
     }
 
