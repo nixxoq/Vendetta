@@ -5,6 +5,36 @@ use crate::{
     model::{RenderReactionGroup, RenderReactionKey},
 };
 
+pub fn normalize_reaction_emoji(emoticon: &str) -> String {
+    let mut result = String::with_capacity(emoticon.len() + 8);
+    let chars: Vec<char> = emoticon.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        result.push(c);
+        if (c == '\u{2764}'
+            || c == '\u{263a}'
+            || c == '\u{2639}'
+            || c == '\u{2600}'
+            || c == '\u{270c}'
+            || c == '\u{270b}'
+            || c == '\u{270d}'
+            || c == '\u{2763}'
+            || c == '\u{26a1}'
+            || c == '\u{2601}'
+            || c == '\u{2614}'
+            || c == '\u{2615}'
+            || c == '\u{2753}'
+            || c == '\u{2757}')
+            && (i + 1 >= chars.len() || chars[i + 1] != '\u{fe0f}')
+        {
+            result.push('\u{fe0f}');
+        }
+        i += 1;
+    }
+    result
+}
+
 pub fn render_message_reactions(reactions: &[RenderReactionGroup]) -> String {
     if reactions.is_empty() {
         return String::new();
@@ -22,7 +52,11 @@ pub fn render_message_reactions(reactions: &[RenderReactionGroup]) -> String {
 
         let icon_html = match &group.reaction {
             RenderReactionKey::Emoji(s) | RenderReactionKey::Unknown(s) => {
-                format!("<span class=\"reaction-emoji\">{}</span>", html_escape(s))
+                let normalized = normalize_reaction_emoji(s);
+                format!(
+                    "<span class=\"reaction-emoji\">{}</span>",
+                    html_escape(&normalized)
+                )
             }
             RenderReactionKey::CustomEmoji {
                 document_id,
@@ -47,15 +81,29 @@ pub fn render_message_reactions(reactions: &[RenderReactionGroup]) -> String {
                     )
                 }
             }
-            RenderReactionKey::Paid => "<span class=\"reaction-emoji\">⭐</span>".to_string(),
+            RenderReactionKey::Paid => {
+                "<span class=\"reaction-emoji\" title=\"Telegram Star\">⭐</span>".to_string()
+            }
         };
 
         let count = group.count;
         let suffix = if count == 1 { "reaction" } else { "reactions" };
 
+        let aria_label = match &group.reaction {
+            RenderReactionKey::Paid => format!("⭐ {count} {suffix}"),
+            RenderReactionKey::Emoji(s) | RenderReactionKey::Unknown(s) => {
+                format!("{s} {count} {suffix}")
+            }
+            RenderReactionKey::CustomEmoji { alt_text, .. } => {
+                let alt = alt_text.as_deref().unwrap_or("Custom Reaction");
+                format!("{alt} {count} {suffix}")
+            }
+        };
+
         let _ = writeln!(
             html,
-            "      <div class=\"reaction-badge{chosen_class}\" tabindex=\"0\" role=\"button\" aria-haspopup=\"true\">"
+            "      <div class=\"reaction-badge{chosen_class}\" tabindex=\"0\" role=\"button\" aria-haspopup=\"true\" aria-label=\"{}\">",
+            html_escape(&aria_label)
         );
         let _ = writeln!(
             html,

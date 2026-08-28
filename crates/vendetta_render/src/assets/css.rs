@@ -402,22 +402,23 @@ a:hover {
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 1.25rem 2rem;
+  padding: 1rem 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.375rem;
 }
 
 /* Date Separator */
 .date-separator {
+  align-self: center;
   text-align: center;
-  margin: 1.25rem 0;
-  position: sticky;
-  top: 0.5rem;
-  z-index: 10;
+  margin: 1rem 0 0.5rem 0;
+  position: static;
+  z-index: 1;
 }
 
 .date-separator-pill {
+  display: inline-block;
   background: var(--bg-system-event);
   backdrop-filter: blur(8px);
   color: var(--text-secondary);
@@ -430,6 +431,7 @@ a:hover {
 
 /* System Event */
 .system-event {
+  align-self: center;
   text-align: center;
   margin: 0.5rem 0;
 }
@@ -752,7 +754,18 @@ pub const TELEGRAM_LIKE_CSS: &str = r##"/* Message Rows */
   display: flex;
   gap: 0.5rem;
   align-items: flex-end;
-  margin-bottom: 0.25rem;
+  margin-bottom: 0;
+  position: relative;
+}
+
+.album-sub-anchor {
+  position: absolute;
+  width: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+  visibility: hidden;
 }
 
 .message-row:target .message-bubble {
@@ -1379,13 +1392,23 @@ blockquote,
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  margin-top: 0.5rem;
+  margin-top: 0.375rem;
+  margin-left: -0.75rem;
+  margin-right: -0.75rem;
+  margin-bottom: -0.5rem;
   border-top: 1px solid var(--border-color);
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
   color: var(--accent-color);
   font-size: 0.875rem;
   font-weight: 500;
   cursor: default;
   user-select: none;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="dark"] .channel-comments-bar {
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .channel-comments-bar .comments-icon {
@@ -1400,7 +1423,7 @@ blockquote,
 .message-reactions {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
   margin-top: 6px;
   margin-bottom: 2px;
   position: relative;
@@ -1446,6 +1469,8 @@ blockquote,
 .reaction-emoji {
   display: inline-block;
   line-height: 1;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji", "EmojiSymbols", sans-serif;
+  font-variant-emoji: emoji;
 }
 
 .reaction-custom-icon {
