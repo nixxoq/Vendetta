@@ -800,4 +800,26 @@ impl ArchiveDb {
             Ok(ids.into_iter().collect())
         })
     }
+
+    pub fn find_creation_or_title_change(&self, peer_id: PeerId) -> StorageResult<Option<String>> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT text FROM messages 
+                 WHERE peer_id = ?1 AND (text LIKE 'Created channel: \"%' OR text LIKE 'Created group: \"%' OR text LIKE 'Changed group title to: \"%')
+                 ORDER BY message_id ASC LIMIT 1",
+            )?;
+            let mut rows = stmt.query(params![peer_id.raw()])?;
+            if let Some(row) = rows.next()? {
+                let text: Option<String> = row.get(0)?;
+                if let Some(t) = text
+                    && let Some(start) = t.find('"')
+                    && let Some(end) = t.rfind('"')
+                    && end > start
+                {
+                    return Ok(Some(t[start + 1..end].to_string()));
+                }
+            }
+            Ok(None)
+        })
+    }
 }
