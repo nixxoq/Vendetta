@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use grammers_tl_types::Deserializable;
 use vendetta_model::{MediaKind, MessageKey, MessageState, PeerId};
 use vendetta_storage::ArchiveDb;
 
@@ -50,21 +51,69 @@ impl<'a> ReplyResolver<'a> {
         Self { db, location_map }
     }
 
+    fn resolve_sender_name(&self, target_msg: &vendetta_model::MessageRecord) -> String {
+        let peer_id = target_msg.sender_id.unwrap_or(target_msg.key.peer_id);
+        if let Ok(Some(peer)) = self.db.get_peer(peer_id) {
+            if let Some(name) = &peer.name {
+                let t = name.trim();
+                if !t.is_empty() && t != "Unknown" {
+                    return t.to_string();
+                }
+            }
+            if let Some(ref raw) = peer.raw_tl {
+                if let Ok(grammers_tl_types::enums::Chat::Channel(c)) =
+                    grammers_tl_types::enums::Chat::from_bytes(raw)
+                {
+                    let t = c.title.trim();
+                    if !t.is_empty() && t != "Unknown" {
+                        return t.to_string();
+                    }
+                } else if let Ok(grammers_tl_types::enums::Chat::Chat(c)) =
+                    grammers_tl_types::enums::Chat::from_bytes(raw)
+                {
+                    let t = c.title.trim();
+                    if !t.is_empty() && t != "Unknown" {
+                        return t.to_string();
+                    }
+                } else if let Ok(grammers_tl_types::enums::User::User(u)) =
+                    grammers_tl_types::enums::User::from_bytes(raw)
+                {
+                    let full = match (&u.first_name, &u.last_name) {
+                        (Some(f), Some(l)) => format!("{f} {l}"),
+                        (Some(f), None) => f.clone(),
+                        (None, Some(l)) => l.clone(),
+                        (None, None) => u.username.clone().unwrap_or_default(),
+                    };
+                    let trimmed = full.trim();
+                    if !trimmed.is_empty() && trimmed != "Unknown" {
+                        return trimmed.to_string();
+                    }
+                }
+            }
+            if let Some(uname) = &peer.username {
+                let u = uname.trim();
+                if !u.is_empty() {
+                    return format!("@{u}");
+                }
+            }
+        }
+
+        if let Ok(Some(title)) = self.db.find_creation_or_title_change(peer_id) {
+            let t = title.trim();
+            if !t.is_empty() && t != "Unknown" {
+                return t.to_string();
+            }
+        }
+
+        format!("Chat {}", peer_id.raw())
+    }
+
     pub fn resolve_reply(&self, source_peer: PeerId, target_key: MessageKey) -> RenderReplyPreview {
         let target_msg_opt = self.db.get_message(target_key).ok().flatten();
 
         let (sender_name, text_snippet, media_indicator, state) =
             if let Some(target) = &target_msg_opt {
-                let sender = if let Some(sid) = target.sender_id {
-                    self.db
-                        .get_peer(sid)
-                        .ok()
-                        .flatten()
-                        .and_then(|p| p.name)
-                        .unwrap_or_else(|| format!("User {}", sid.raw()))
-                } else {
-                    "Unknown".to_string()
-                };
+                let sender = self.resolve_sender_name(target);
 
                 let media_items = self
                     .db
