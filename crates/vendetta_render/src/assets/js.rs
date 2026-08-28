@@ -130,6 +130,30 @@ pub const APP_JS: &str = r#"(function() {
     });
   }
 
+  function initTgsStickers() {
+    const canvases = document.querySelectorAll('canvas.sticker-canvas[data-tgs-url]');
+    canvases.forEach((canvas) => {
+      const url = canvas.getAttribute('data-tgs-url');
+      if (!url) return;
+      if (typeof window.DecompressionStream !== 'undefined') {
+        fetch(url)
+          .then((res) => res.blob())
+          .then((blob) => {
+            const ds = new DecompressionStream('gzip');
+            const decompressedStream = blob.stream().pipeThrough(ds);
+            return new Response(decompressedStream).json();
+          })
+          .then((lottieData) => {
+            const ctx = canvas.getContext('2d');
+            if (ctx && lottieData && lottieData.nm) {
+              canvas.title = lottieData.nm;
+            }
+          })
+          .catch(() => {});
+      }
+    });
+  }
+
   window.addEventListener('hashchange', highlightAnchor);
   window.addEventListener('DOMContentLoaded', () => {
     initTheme();
@@ -138,6 +162,7 @@ pub const APP_JS: &str = r#"(function() {
     highlightAnchor();
     initChatInfoModal();
     initReactions();
+    initTgsStickers();
   });
 })();"#;
 

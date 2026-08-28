@@ -1324,8 +1324,76 @@ blockquote,
 }
 
 .album-continuation-badge a.continuation-link:hover {
-  opacity: 0.85;
-  text-decoration: underline;
+  background: var(--accent-primary);
+  color: #ffffff;
+}
+
+/* Rendering FUCKING TELEGRAM Sticker(s) */
+.msg-sticker .message-bubble {
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.media-sticker {
+  display: inline-block;
+  max-width: 200px;
+  max-height: 200px;
+}
+
+.media-sticker .sticker-img,
+.media-sticker .sticker-video,
+.media-sticker .sticker-canvas {
+  max-width: 200px;
+  max-height: 200px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+.media-sticker .sticker-fallback {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+/* Channel Post & Comments Presentation */
+// currently placeholder, soon i'll implement dumping comments from post too :)
+.channel-post {
+  width: 100%;
+}
+
+.channel-post .message-bubble {
+  max-width: 640px;
+  width: auto;
+}
+
+.channel-comments-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--border-color);
+  color: var(--accent-color);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: default;
+  user-select: none;
+}
+
+.channel-comments-bar .comments-icon {
+  font-size: 1rem;
+}
+
+.channel-comments-bar .comments-label {
+  color: inherit;
 }
 
 /* Reaction Badges & Popover */
