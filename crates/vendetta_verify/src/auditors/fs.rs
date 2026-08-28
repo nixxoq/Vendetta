@@ -106,27 +106,26 @@ pub fn audit_relative_path(
 
         if let (Ok(canonical_target), Ok(canonical_root)) =
             (resolved_target.canonicalize(), root.canonicalize())
+            && !canonical_target.starts_with(&canonical_root)
         {
-            if !canonical_target.starts_with(&canonical_root) {
-                return Err(Box::new(VerificationFinding {
-                    code: "SYMLINK_ESCAPE_DETECTED".to_string(),
-                    severity: FindingSeverity::Error,
-                    category,
-                    peer_id: None,
-                    message_id: None,
-                    media_id: None,
-                    path: Some(rel_str.to_string()),
-                    description: format!(
-                        "Symlink at {} points outside archive root: {}",
-                        full_path.display(),
-                        canonical_target.display()
-                    ),
-                    evidence: None,
-                    recommendation: Some(
-                        "Replace escaping symlink with a local file or relative link.".to_string(),
-                    ),
-                }));
-            }
+            return Err(Box::new(VerificationFinding {
+                code: "SYMLINK_ESCAPE_DETECTED".to_string(),
+                severity: FindingSeverity::Error,
+                category,
+                peer_id: None,
+                message_id: None,
+                media_id: None,
+                path: Some(rel_str.to_string()),
+                description: format!(
+                    "Symlink at {} points outside archive root: {}",
+                    full_path.display(),
+                    canonical_target.display()
+                ),
+                evidence: None,
+                recommendation: Some(
+                    "Replace escaping symlink with a local file or relative link.".to_string(),
+                ),
+            }));
         }
     }
 

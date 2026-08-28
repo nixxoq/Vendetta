@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 
-use crate::model::{FindingCategory, OverallStatus, VerificationFinding};
 #[allow(unused_imports)]
 use crate::FindingSeverity;
+use crate::model::{FindingCategory, OverallStatus, VerificationFinding};
 
 pub fn calculate_exit_status(
     fatal_count: usize,
