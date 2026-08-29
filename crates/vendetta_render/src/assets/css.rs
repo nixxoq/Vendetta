@@ -271,6 +271,92 @@ a:hover {
   text-overflow: ellipsis;
 }
 
+/* Topics */
+.topics-sidebar {
+  width: 260px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.topics-header {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.topics-heading {
+  font-weight: 700;
+  font-size: 1.125rem;
+}
+
+.topics-list {
+  flex: 1;
+  overflow-y: auto;
+  list-style: none;
+  padding: 0.5rem 0;
+  margin: 0;
+}
+
+.topic-item {
+  margin: 0 0.5rem 2px 0.5rem;
+  border-radius: 8px;
+  transition: background-color 0.15s;
+}
+
+.topic-link {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 8px;
+}
+
+.topic-item:hover, .topic-item.active {
+  background-color: var(--bg-primary);
+}
+
+.topic-icon {
+  font-size: 1.125rem;
+  font-weight: 800;
+  color: var(--accent-color);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  flex-shrink: 0;
+}
+
+.topic-title {
+  font-weight: 600;
+  font-size: 0.875rem;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topic-count {
+  font-size: 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  padding: 2px 6px;
+  border-radius: 10px;
+  color: var(--text-secondary);
+}
+
+.topic-item.active .topic-count {
+  background: var(--accent-color);
+  color: #fff;
+  border-color: var(--accent-color);
+}
+
 /* Chat Pane */
 .chat-pane {
   flex: 1;
