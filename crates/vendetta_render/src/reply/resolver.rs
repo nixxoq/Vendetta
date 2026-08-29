@@ -189,25 +189,35 @@ impl<'a> ReplyResolver<'a> {
                 )
             };
 
-        let target_url = self.location_map.get_location(&target_key).map(|(page_idx, target_topic_id)| {
-            let anchor = ArchiveUrlBuilder::message_anchor(target_key.peer_id, target_key.message_id);
-            if target_key.peer_id == source_peer {
-                let chunk_file = if let Some(tid) = target_topic_id {
-                    ArchiveUrlBuilder::topic_page_file_name(tid, page_idx)
-                } else {
-                    ArchiveUrlBuilder::page_file_name(page_idx)
-                };
-                format!("{chunk_file}#{anchor}")
-            } else {
-                let target_chunk = if let Some(tid) = target_topic_id {
-                    ArchiveUrlBuilder::topic_chunk_file_rel(target_key.peer_id, tid, page_idx)
-                } else {
-                    ArchiveUrlBuilder::chunk_file_rel(target_key.peer_id, page_idx)
-                };
-                let rel = ArchiveUrlBuilder::relative_url(2, &target_chunk);
-                format!("{rel}#{anchor}")
-            }
-        });
+        let target_url =
+            self.location_map
+                .get_location(&target_key)
+                .map(|(page_idx, target_topic_id)| {
+                    let anchor = ArchiveUrlBuilder::message_anchor(
+                        target_key.peer_id,
+                        target_key.message_id,
+                    );
+                    if target_key.peer_id == source_peer {
+                        let chunk_file = if let Some(tid) = target_topic_id {
+                            ArchiveUrlBuilder::topic_page_file_name(tid, page_idx)
+                        } else {
+                            ArchiveUrlBuilder::page_file_name(page_idx)
+                        };
+                        format!("{chunk_file}#{anchor}")
+                    } else {
+                        let target_chunk = if let Some(tid) = target_topic_id {
+                            ArchiveUrlBuilder::topic_chunk_file_rel(
+                                target_key.peer_id,
+                                tid,
+                                page_idx,
+                            )
+                        } else {
+                            ArchiveUrlBuilder::chunk_file_rel(target_key.peer_id, page_idx)
+                        };
+                        let rel = ArchiveUrlBuilder::relative_url(2, &target_chunk);
+                        format!("{rel}#{anchor}")
+                    }
+                });
 
         RenderReplyPreview {
             target_key,

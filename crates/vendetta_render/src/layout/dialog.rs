@@ -91,17 +91,24 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
                 .map(|t| t.topic_id == topic.topic_id)
                 .unwrap_or(false);
             let active_cls = if is_active { " active" } else { "" };
-            let icon_style = if let Some(color) = topic.icon_color {
-                format!(" style=\"color: #{:06x};\"", color & 0xFFFFFF)
+            let icon_html = if let Some(ref asset_rel) = topic.icon_asset {
+                format!(
+                    "<img src=\"{}\" alt=\"{}\" class=\"topic-icon-img\" loading=\"lazy\">",
+                    html_escape(asset_rel),
+                    html_escape(&topic.title),
+                )
+            } else if let Some(color) = topic.icon_color {
+                let hex_color = format!("#{:06x}", color & 0xFFFFFF);
+                format!("<span class=\"topic-icon\" style=\"color: {hex_color};\">#</span>")
             } else {
-                String::new()
+                "<span class=\"topic-icon\">#</span>".to_string()
             };
 
             let _ = write!(
                 topic_items_html,
                 r#"<li class="topic-item{active_cls}">
   <a href="{topic_url}" class="topic-link">
-    <span class="topic-icon"{icon_style}>#</span>
+    {icon_html}
     <span class="topic-title">{}</span>
     <span class="topic-count">{}</span>
   </a>
@@ -113,15 +120,18 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         }
 
         topics_sidebar_html = format!(
-            r#"<aside class="topics-sidebar">
+            r##"<aside class="topics-sidebar">
   <div class="topics-header">
     <span class="topics-heading">Topics</span>
+    <button id="compact-topics-toggle" class="btn-icon" title="Toggle Compact View" aria-label="Toggle Compact View">
+      <svg class="icon"><use href="#icon-list-compact"></use></svg>
+    </button>
   </div>
   <ul class="topics-list">
     {topic_items_html}
   </ul>
 </aside>
-"#
+"##
         );
     }
 
@@ -257,6 +267,10 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         document.documentElement.setAttribute('data-theme', theme);
         if (document.documentElement.dataset) {{
           document.documentElement.dataset.theme = theme;
+        }}
+        var savedCompact = localStorage.getItem('vendetta-compact-topics');
+        if (savedCompact === 'true') {{
+          document.documentElement.setAttribute('data-compact-topics', 'true');
         }}
       }} catch (e) {{
         var isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
