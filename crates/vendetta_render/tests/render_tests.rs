@@ -37,6 +37,490 @@ fn create_test_db() -> (ArchiveDb, TempDir) {
     (db, dir)
 }
 
+fn create_synthetic_forum_channel_tl(peer_raw_id: i64, title: &str) -> Vec<u8> {
+    use grammers_tl_types::{self as tl, Serializable};
+    let channel = tl::enums::Chat::Channel(tl::types::Channel {
+        creator: false,
+        left: false,
+        broadcast: false,
+        verified: false,
+        megagroup: true,
+        restricted: false,
+        signatures: false,
+        min: false,
+        scam: false,
+        has_link: false,
+        has_geo: false,
+        slowmode_enabled: false,
+        call_active: false,
+        call_not_empty: false,
+        fake: false,
+        gigagroup: false,
+        noforwards: false,
+        join_to_send: false,
+        join_request: false,
+        forum: true,
+        stories_hidden: false,
+        stories_hidden_min: false,
+        stories_unavailable: false,
+        signature_profiles: false,
+        autotranslation: false,
+        broadcast_messages_allowed: false,
+        monoforum: false,
+        forum_tabs: false,
+        id: peer_raw_id.unsigned_abs() as i64,
+        access_hash: Some(0),
+        title: title.to_string(),
+        username: None,
+        photo: tl::enums::ChatPhoto::Empty,
+        date: 1700000000,
+        restriction_reason: None,
+        admin_rights: None,
+        banned_rights: None,
+        default_banned_rights: None,
+        participants_count: Some(10),
+        usernames: None,
+        stories_max_id: None,
+        color: None,
+        profile_color: None,
+        emoji_status: None,
+        level: None,
+        subscription_until_date: None,
+        bot_verification_icon: None,
+        send_paid_messages_stars: None,
+        linked_monoforum_id: None,
+        linked_community_id: None,
+    });
+    channel.to_bytes()
+}
+
+fn create_synthetic_topic_create_service_tl(msg_id: i32, title: &str, color: i32) -> Vec<u8> {
+    use grammers_tl_types::{self as tl, Serializable};
+    let s = tl::enums::Message::Service(tl::types::MessageService {
+        out: false,
+        mentioned: false,
+        media_unread: false,
+        silent: false,
+        post: false,
+        legacy: false,
+        id: msg_id,
+        from_id: Some(tl::enums::Peer::User(tl::types::PeerUser { user_id: 1001 })),
+        peer_id: tl::enums::Peer::Channel(tl::types::PeerChannel {
+            channel_id: 999000111,
+        }),
+        reply_to: None,
+        date: 1700000000 + msg_id,
+        action: tl::enums::MessageAction::TopicCreate(tl::types::MessageActionTopicCreate {
+            title: title.to_string(),
+            icon_color: color,
+            icon_emoji_id: None,
+            title_missing: false,
+        }),
+        ttl_period: None,
+        reactions: None,
+        reactions_are_possible: false,
+        saved_peer_id: None,
+    });
+    s.to_bytes()
+}
+
+fn create_synthetic_topic_edit_close_tl(msg_id: i32, topic_id: i32) -> Vec<u8> {
+    use grammers_tl_types::{self as tl, Serializable};
+    let s = tl::enums::Message::Service(tl::types::MessageService {
+        out: false,
+        mentioned: false,
+        media_unread: false,
+        silent: false,
+        post: false,
+        legacy: false,
+        id: msg_id,
+        from_id: Some(tl::enums::Peer::User(tl::types::PeerUser { user_id: 1001 })),
+        peer_id: tl::enums::Peer::Channel(tl::types::PeerChannel {
+            channel_id: 999000111,
+        }),
+        reply_to: Some(tl::enums::MessageReplyHeader::Header(
+            tl::types::MessageReplyHeader {
+                reply_to_scheduled: false,
+                forum_topic: true,
+                quote: false,
+                reply_to_msg_id: Some(topic_id),
+                reply_to_peer_id: None,
+                reply_from: None,
+                reply_media: None,
+                reply_to_top_id: Some(topic_id),
+                quote_text: None,
+                quote_entities: None,
+                quote_offset: None,
+                todo_item_id: None,
+                poll_option: None,
+                reply_to_ephemeral: false,
+            },
+        )),
+        date: 1700000000 + msg_id,
+        action: tl::enums::MessageAction::TopicEdit(tl::types::MessageActionTopicEdit {
+            title: None,
+            icon_emoji_id: None,
+            closed: Some(true),
+            hidden: None,
+        }),
+        ttl_period: None,
+        reactions: None,
+        reactions_are_possible: false,
+        saved_peer_id: None,
+    });
+    s.to_bytes()
+}
+
+fn create_synthetic_forum_message_tl(
+    msg_id: i32,
+    peer_raw_id: i64,
+    topic_id: Option<i32>,
+    reply_to_msg: Option<i32>,
+    text: &str,
+) -> Vec<u8> {
+    use grammers_tl_types::{self as tl, Serializable};
+    let reply_to = if let Some(tid) = topic_id {
+        Some(tl::enums::MessageReplyHeader::Header(
+            tl::types::MessageReplyHeader {
+                reply_to_scheduled: false,
+                forum_topic: true,
+                quote: false,
+                reply_to_msg_id: reply_to_msg.or(Some(tid)),
+                reply_to_peer_id: None,
+                reply_from: None,
+                reply_media: None,
+                reply_to_top_id: if reply_to_msg.is_some() && reply_to_msg != Some(tid) {
+                    Some(tid)
+                } else {
+                    None
+                },
+                quote_text: None,
+                quote_entities: None,
+                quote_offset: None,
+                todo_item_id: None,
+                poll_option: None,
+                reply_to_ephemeral: false,
+            },
+        ))
+    } else {
+        reply_to_msg.map(|r_id| {
+            tl::enums::MessageReplyHeader::Header(tl::types::MessageReplyHeader {
+                reply_to_scheduled: false,
+                forum_topic: false,
+                quote: false,
+                reply_to_msg_id: Some(r_id),
+                reply_to_peer_id: None,
+                reply_from: None,
+                reply_media: None,
+                reply_to_top_id: None,
+                quote_text: None,
+                quote_entities: None,
+                quote_offset: None,
+                todo_item_id: None,
+                poll_option: None,
+                reply_to_ephemeral: false,
+            })
+        })
+    };
+
+    let m = tl::enums::Message::Message(tl::types::Message {
+        out: false,
+        mentioned: false,
+        media_unread: false,
+        silent: false,
+        post: false,
+        from_scheduled: false,
+        legacy: false,
+        edit_hide: false,
+        pinned: false,
+        noforwards: false,
+        invert_media: false,
+        offline: false,
+        video_processing_pending: false,
+        paid_suggested_post_stars: false,
+        paid_suggested_post_ton: false,
+        id: msg_id,
+        from_id: Some(tl::enums::Peer::User(tl::types::PeerUser { user_id: 2002 })),
+        from_boosts_applied: None,
+        from_rank: None,
+        peer_id: tl::enums::Peer::Channel(tl::types::PeerChannel {
+            channel_id: peer_raw_id.unsigned_abs() as i64,
+        }),
+        saved_peer_id: None,
+        fwd_from: None,
+        via_bot_id: None,
+        via_business_bot_id: None,
+        guestchat_via_from: None,
+        reply_to,
+        date: 1700000000 + msg_id,
+        message: text.to_string(),
+        media: None,
+        reply_markup: None,
+        entities: None,
+        views: None,
+        forwards: None,
+        replies: None,
+        edit_date: None,
+        post_author: None,
+        grouped_id: None,
+        reactions: None,
+        restriction_reason: None,
+        ttl_period: None,
+        quick_reply_shortcut_id: None,
+        effect: None,
+        factcheck: None,
+        report_delivery_until_date: None,
+        paid_message_stars: None,
+        suggested_post: None,
+        schedule_repeat_period: None,
+        summary_from_language: None,
+        rich_message: None,
+    });
+    m.to_bytes()
+}
+
+fn setup_synthetic_forum_database() -> (tempfile::TempDir, vendetta_storage::ArchiveDb) {
+    use vendetta_model::{
+        MessageId, MessageKey, MessageRecord, MessageState, PeerId, PeerRecord, PeerType,
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let db = vendetta_storage::ArchiveDb::open(tmp.path().join("archive.db")).unwrap();
+
+    let forum_peer = PeerId::new(-999000111);
+    let raw_channel = create_synthetic_forum_channel_tl(-999000111, "Test Forum");
+
+    db.upsert_peer(&PeerRecord {
+        peer_id: forum_peer,
+        peer_type: PeerType::Group,
+        name: Some("Test Forum".to_string()),
+        username: None,
+        phone: None,
+        raw_tl: Some(raw_channel),
+        updated_at: 1700000000,
+    })
+    .unwrap();
+
+    let mut messages = Vec::new();
+
+    messages.push(MessageRecord {
+        key: MessageKey::new(forum_peer, MessageId::new(1)),
+        sender_id: None,
+        date: 1700000001,
+        edit_date: None,
+        state: MessageState::Active,
+        text: Some("Group created".to_string()),
+        entities_json: None,
+        reply_to_msg_id: None,
+        reply_to_top_id: None,
+        reply_to_peer_id: None,
+        grouped_id: None,
+        forward_json: None,
+        reactions_json: None,
+        views: None,
+        forwards_count: None,
+        raw_tl: Some(create_synthetic_topic_create_service_tl(
+            1, "General", 0x112233,
+        )),
+    });
+
+    messages.push(MessageRecord {
+        key: MessageKey::new(forum_peer, MessageId::new(2)),
+        sender_id: Some(PeerId::new(2002)),
+        date: 1700000002,
+        edit_date: None,
+        state: MessageState::Active,
+        text: Some("General topic welcome message".to_string()),
+        entities_json: None,
+        reply_to_msg_id: None,
+        reply_to_top_id: None,
+        reply_to_peer_id: None,
+        grouped_id: None,
+        forward_json: None,
+        reactions_json: None,
+        views: None,
+        forwards_count: None,
+        raw_tl: Some(create_synthetic_forum_message_tl(
+            2,
+            -999000111,
+            None,
+            None,
+            "General topic welcome message",
+        )),
+    });
+
+    messages.push(MessageRecord {
+        key: MessageKey::new(forum_peer, MessageId::new(10)),
+        sender_id: Some(PeerId::new(1001)),
+        date: 1700000010,
+        edit_date: None,
+        state: MessageState::Active,
+        text: Some("Service action".to_string()),
+        entities_json: None,
+        reply_to_msg_id: None,
+        reply_to_top_id: None,
+        reply_to_peer_id: None,
+        grouped_id: None,
+        forward_json: None,
+        reactions_json: None,
+        views: None,
+        forwards_count: None,
+        raw_tl: Some(create_synthetic_topic_create_service_tl(
+            10,
+            "Programming",
+            0x00AAFF,
+        )),
+    });
+
+    for i in 1..=6 {
+        let msg_id = 10 + i;
+        messages.push(MessageRecord {
+            key: MessageKey::new(forum_peer, MessageId::new(msg_id)),
+            sender_id: Some(PeerId::new(2002)),
+            date: 1700000010 + i,
+            edit_date: None,
+            state: MessageState::Active,
+            text: Some(format!("Programming message {i}")),
+            entities_json: None,
+            reply_to_msg_id: Some(MessageId::new(10)),
+            reply_to_top_id: None,
+            reply_to_peer_id: None,
+            grouped_id: None,
+            forward_json: None,
+            reactions_json: None,
+            views: None,
+            forwards_count: None,
+            raw_tl: Some(create_synthetic_forum_message_tl(
+                msg_id as i32,
+                -999000111,
+                Some(10),
+                None,
+                &format!("Programming message {i}"),
+            )),
+        });
+    }
+
+    messages.push(MessageRecord {
+        key: MessageKey::new(forum_peer, MessageId::new(20)),
+        sender_id: Some(PeerId::new(1001)),
+        date: 1700000020,
+        edit_date: None,
+        state: MessageState::Active,
+        text: Some("Service action".to_string()),
+        entities_json: None,
+        reply_to_msg_id: None,
+        reply_to_top_id: None,
+        reply_to_peer_id: None,
+        grouped_id: None,
+        forward_json: None,
+        reactions_json: None,
+        views: None,
+        forwards_count: None,
+        raw_tl: Some(create_synthetic_topic_create_service_tl(
+            20, "Games", 0xFF5500,
+        )),
+    });
+
+    for i in 1..=2 {
+        let msg_id = 20 + i;
+        messages.push(MessageRecord {
+            key: MessageKey::new(forum_peer, MessageId::new(msg_id)),
+            sender_id: Some(PeerId::new(2002)),
+            date: 1700000020 + i,
+            edit_date: None,
+            state: MessageState::Active,
+            text: Some(format!("Games discussion {i}")),
+            entities_json: None,
+            reply_to_msg_id: Some(MessageId::new(20)),
+            reply_to_top_id: None,
+            reply_to_peer_id: None,
+            grouped_id: None,
+            forward_json: None,
+            reactions_json: None,
+            views: None,
+            forwards_count: None,
+            raw_tl: Some(create_synthetic_forum_message_tl(
+                msg_id as i32,
+                -999000111,
+                Some(20),
+                None,
+                &format!("Games discussion {i}"),
+            )),
+        });
+    }
+
+    messages.push(MessageRecord {
+        key: MessageKey::new(forum_peer, MessageId::new(30)),
+        sender_id: Some(PeerId::new(1001)),
+        date: 1700000030,
+        edit_date: None,
+        state: MessageState::Active,
+        text: Some("Service action".to_string()),
+        entities_json: None,
+        reply_to_msg_id: None,
+        reply_to_top_id: None,
+        reply_to_peer_id: None,
+        grouped_id: None,
+        forward_json: None,
+        reactions_json: None,
+        views: None,
+        forwards_count: None,
+        raw_tl: Some(create_synthetic_topic_create_service_tl(
+            30, "Random", 0x888888,
+        )),
+    });
+
+    for i in 1..=3 {
+        let msg_id = 30 + i;
+        messages.push(MessageRecord {
+            key: MessageKey::new(forum_peer, MessageId::new(msg_id)),
+            sender_id: Some(PeerId::new(2002)),
+            date: 1700000030 + i,
+            edit_date: None,
+            state: MessageState::Active,
+            text: Some(format!("Random chat {i}")),
+            entities_json: None,
+            reply_to_msg_id: Some(MessageId::new(30)),
+            reply_to_top_id: None,
+            reply_to_peer_id: None,
+            grouped_id: None,
+            forward_json: None,
+            reactions_json: None,
+            views: None,
+            forwards_count: None,
+            raw_tl: Some(create_synthetic_forum_message_tl(
+                msg_id as i32,
+                -999000111,
+                Some(30),
+                None,
+                &format!("Random chat {i}"),
+            )),
+        });
+    }
+
+    messages.push(MessageRecord {
+        key: MessageKey::new(forum_peer, MessageId::new(34)),
+        sender_id: Some(PeerId::new(1001)),
+        date: 1700000034,
+        edit_date: None,
+        state: MessageState::Active,
+        text: Some("Service action".to_string()),
+        entities_json: None,
+        reply_to_msg_id: Some(MessageId::new(30)),
+        reply_to_top_id: Some(MessageId::new(30)),
+        reply_to_peer_id: None,
+        grouped_id: None,
+        forward_json: None,
+        reactions_json: None,
+        views: None,
+        forwards_count: None,
+        raw_tl: Some(create_synthetic_topic_edit_close_tl(34, 30)),
+    });
+
+    db.insert_messages_batch(&messages).unwrap();
+
+    (tmp, db)
+}
+
 #[test]
 fn revision_specific_entity_rendering_supports_multiversion() {
     let rev1_text = "Hello world";
@@ -3940,4 +4424,134 @@ fn test_per_reaction_count() {
     assert!(html.contains("<span class=\"reaction-count\">42</span>"));
     assert!(html.contains("⭐"));
     assert!(!html.contains("Paid</span>"));
+}
+
+#[test]
+fn test_forum_supergroup_detection() {
+    let (_tmp, db) = setup_synthetic_forum_database();
+    let tmp_out = tempfile::tempdir().unwrap();
+    let opts = vendetta_render::model::ExportOptions {
+        output_dir: tmp_out.path().to_path_buf(),
+        replace: true,
+        ..Default::default()
+    };
+    let exporter = vendetta_render::HtmlArchiveExporter::new(&db, opts);
+    let summary = exporter.export().unwrap();
+    assert_eq!(summary.dialogs_count, 1);
+}
+
+#[test]
+fn test_topic_discovery() {
+    let (_tmp, db) = setup_synthetic_forum_database();
+    let tmp_out = tempfile::tempdir().unwrap();
+    let opts = vendetta_render::model::ExportOptions {
+        output_dir: tmp_out.path().to_path_buf(),
+        replace: true,
+        ..Default::default()
+    };
+    let exporter = vendetta_render::HtmlArchiveExporter::new(&db, opts);
+    let _summary = exporter.export().unwrap();
+
+    let peer_dir = tmp_out.path().join("chats/p_neg_999000111");
+    assert!(
+        peer_dir.join("topic_1_page_00001.html").exists(),
+        "General topic page must exist"
+    );
+    assert!(
+        peer_dir.join("topic_10_page_00001.html").exists(),
+        "Programming topic page must exist"
+    );
+    assert!(
+        peer_dir.join("topic_20_page_00001.html").exists(),
+        "Games topic page must exist"
+    );
+    assert!(
+        peer_dir.join("topic_30_page_00001.html").exists(),
+        "Random topic page must exist"
+    );
+}
+
+#[test]
+fn test_topic_message_count() {
+    let (_tmp, db) = setup_synthetic_forum_database();
+    let tmp_out = tempfile::tempdir().unwrap();
+    let opts = vendetta_render::model::ExportOptions {
+        output_dir: tmp_out.path().to_path_buf(),
+        replace: true,
+        ..Default::default()
+    };
+    let exporter = vendetta_render::HtmlArchiveExporter::new(&db, opts);
+    exporter.export().unwrap();
+
+    let prog_html = std::fs::read_to_string(
+        tmp_out
+            .path()
+            .join("chats/p_neg_999000111/topic_10_page_00001.html"),
+    )
+    .unwrap();
+
+    // General: 2 messages (id 1, 2)
+    // Programming: 7 messages (id 10 creation + 6 messages)
+    // Games: 3 messages (id 20 creation + 2 messages)
+    // Random: 5 messages (id 30 creation + 3 messages + 1 close)
+    assert!(prog_html.contains(
+        "<span class=\"topic-title\">General</span>\n    <span class=\"topic-count\">2</span>"
+    ));
+    assert!(prog_html.contains(
+        "<span class=\"topic-title\">Programming</span>\n    <span class=\"topic-count\">7</span>"
+    ));
+    assert!(prog_html.contains(
+        "<span class=\"topic-title\">Games</span>\n    <span class=\"topic-count\">3</span>"
+    ));
+    assert!(prog_html.contains(
+        "<span class=\"topic-title\">Random</span>\n    <span class=\"topic-count\">5</span>"
+    ));
+}
+
+#[test]
+fn test_is_topic_sidebar_renders() {
+    let (_tmp, db) = setup_synthetic_forum_database();
+    let tmp_out = tempfile::tempdir().unwrap();
+    let opts = vendetta_render::model::ExportOptions {
+        output_dir: tmp_out.path().to_path_buf(),
+        replace: true,
+        ..Default::default()
+    };
+    let exporter = vendetta_render::HtmlArchiveExporter::new(&db, opts);
+    exporter.export().unwrap();
+
+    let prog_html = std::fs::read_to_string(
+        tmp_out
+            .path()
+            .join("chats/p_neg_999000111/topic_10_page_00001.html"),
+    )
+    .unwrap();
+    assert!(
+        prog_html.contains("<aside class=\"topics-sidebar\">"),
+        "Forum group must contain topics-sidebar"
+    );
+    assert!(prog_html.contains("<span class=\"topics-heading\">Topics</span>"));
+    assert!(
+        prog_html.contains("class=\"topic-item active\""),
+        "Active topic must have active class"
+    );
+}
+
+#[test]
+fn test_topic_linking() {
+    let (_tmp, db) = setup_synthetic_forum_database();
+    let tmp_out = tempfile::tempdir().unwrap();
+    let opts = vendetta_render::model::ExportOptions {
+        output_dir: tmp_out.path().to_path_buf(),
+        build_search_index: true,
+        replace: true,
+        ..Default::default()
+    };
+    let exporter = vendetta_render::HtmlArchiveExporter::new(&db, opts);
+    exporter.export().unwrap();
+
+    let shard_file = tmp_out.path().join("search/shards/shard_00001.js");
+    assert!(shard_file.exists());
+    let shard_content = std::fs::read_to_string(shard_file).unwrap();
+    assert!(shard_content.contains("topic_10_page_00001.html#m-p_neg_999000111-11"));
 }
