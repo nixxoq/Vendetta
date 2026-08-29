@@ -90,14 +90,15 @@ impl<'a> SearchIndexer<'a> {
                         continue;
                     }
 
-                    let page_idx = self.location_map.get_page(&msg.key).unwrap_or(0);
-                    let url = ArchiveUrlBuilder::message_full_link(
-                        None,
-                        0,
-                        msg.key.peer_id,
-                        page_idx,
-                        msg.key.message_id,
-                    );
+                    let (page_idx, target_topic_id) =
+                        self.location_map.get_location(&msg.key).unwrap_or((0, None));
+                    let anchor = ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id);
+                    let target_chunk = if let Some(tid) = target_topic_id {
+                        ArchiveUrlBuilder::topic_chunk_file_rel(msg.key.peer_id, tid, page_idx)
+                    } else {
+                        ArchiveUrlBuilder::chunk_file_rel(msg.key.peer_id, page_idx)
+                    };
+                    let url = format!("{target_chunk}#{anchor}");
 
                     let sender_name = if let Some(sid) = msg.sender_id {
                         if let Some(name) = peer_names.get(&sid) {

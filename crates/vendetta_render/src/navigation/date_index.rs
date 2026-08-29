@@ -32,7 +32,7 @@ impl DateNavigator {
         month_map.entry(day).or_insert(page_index);
     }
 
-    pub fn render_date_jump_menu(&self, _from_peer: PeerId) -> String {
+    pub fn render_date_jump_menu(&self, _from_peer: PeerId, topic_id: Option<i32>) -> String {
         if self.entries.is_empty() {
             return String::new();
         }
@@ -56,7 +56,11 @@ impl DateNavigator {
                 "      <li class=\"date-year-group\">\n        <div class=\"date-month-heading\">{year} {month_name}</div>\n        <div class=\"date-days-grid\">"
             );
             for (day, page_idx) in days {
-                let page_file = ArchiveUrlBuilder::page_file_name(*page_idx);
+                let page_file = if let Some(tid) = topic_id {
+                    ArchiveUrlBuilder::topic_page_file_name(tid, *page_idx)
+                } else {
+                    ArchiveUrlBuilder::page_file_name(*page_idx)
+                };
                 let _ = write!(
                     html,
                     "<a href=\"{page_file}#d-{year:04}-{month:02}-{day:02}\" class=\"date-jump-btn\">{day}</a>"
