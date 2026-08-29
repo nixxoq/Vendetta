@@ -13,6 +13,8 @@ use crate::{
 pub struct DialogPageContext<'a> {
     pub current_peer: &'a RenderPeer,
     pub all_peers: &'a [RenderPeer],
+    pub current_topic: Option<&'a crate::model::RenderTopic>,
+    pub topics: &'a [crate::model::RenderTopic],
     pub items: &'a [RenderItem],
     pub page_index: usize,
     pub total_pages: usize,
@@ -39,7 +41,12 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
 
     let mut dialogs_html = String::with_capacity(ctx.all_peers.len() * 256);
     for peer in ctx.all_peers {
-        let chat_url = ArchiveUrlBuilder::chat_root_url(2, peer.peer_id);
+        let default_tid = if peer.is_forum {
+            peer.topics.first().map(|t| t.topic_id)
+        } else {
+            None
+        };
+        let chat_url = ArchiveUrlBuilder::topic_chat_root_url(2, peer.peer_id, default_tid);
         let avatar_html = render_avatar_markup(
             Some(peer.peer_id),
             &peer.name,
@@ -70,6 +77,51 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
 "#,
             html_escape(&peer.name),
             peer.total_messages
+        );
+    }
+
+    let mut topics_sidebar_html = String::new();
+    if !ctx.topics.is_empty() {
+        let mut topic_items_html = String::with_capacity(ctx.topics.len() * 256);
+
+        for topic in ctx.topics {
+            let topic_url = ArchiveUrlBuilder::topic_page_file_name(topic.topic_id, 0);
+            let is_active = ctx
+                .current_topic
+                .map(|t| t.topic_id == topic.topic_id)
+                .unwrap_or(false);
+            let active_cls = if is_active { " active" } else { "" };
+            let icon_style = if let Some(color) = topic.icon_color {
+                format!(" style=\"color: #{:06x};\"", color & 0xFFFFFF)
+            } else {
+                String::new()
+            };
+
+            let _ = write!(
+                topic_items_html,
+                r#"<li class="topic-item{active_cls}">
+  <a href="{topic_url}" class="topic-link">
+    <span class="topic-icon"{icon_style}>#</span>
+    <span class="topic-title">{}</span>
+    <span class="topic-count">{}</span>
+  </a>
+</li>
+"#,
+                html_escape(&topic.title),
+                topic.total_messages
+            );
+        }
+
+        topics_sidebar_html = format!(
+            r#"<aside class="topics-sidebar">
+  <div class="topics-header">
+    <span class="topics-heading">Topics</span>
+  </div>
+  <ul class="topics-list">
+    {topic_items_html}
+  </ul>
+</aside>
+"#
         );
     }
 
@@ -105,14 +157,22 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
     }
 
     let prev_link = if ctx.page_index > 0 {
-        let prev_file = ArchiveUrlBuilder::page_file_name(ctx.page_index - 1);
+        let prev_file = if let Some(top) = ctx.current_topic {
+            ArchiveUrlBuilder::topic_page_file_name(top.topic_id, ctx.page_index - 1)
+        } else {
+            ArchiveUrlBuilder::page_file_name(ctx.page_index - 1)
+        };
         format!("<a href=\"{prev_file}\" class=\"btn-nav\">← Previous Page</a>")
     } else {
         "<span class=\"btn-nav disabled\">← Previous Page</span>".to_string()
     };
 
     let next_link = if ctx.page_index + 1 < ctx.total_pages {
-        let next_file = ArchiveUrlBuilder::page_file_name(ctx.page_index + 1);
+        let next_file = if let Some(top) = ctx.current_topic {
+            ArchiveUrlBuilder::topic_page_file_name(top.topic_id, ctx.page_index + 1)
+        } else {
+            ArchiveUrlBuilder::page_file_name(ctx.page_index + 1)
+        };
         format!("<a href=\"{next_file}\" class=\"btn-nav\">Next Page →</a>")
     } else {
         "<span class=\"btn-nav disabled\">Next Page →</span>".to_string()
@@ -122,7 +182,15 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
     let total_pages_display = ctx.total_pages.max(1);
     let escaped_name = html_escape(&ctx.current_peer.name);
 
-    let subtitle = if let Some(un) = &ctx.current_peer.username {
+    let display_title = if let Some(top) = ctx.current_topic {
+        format!("{escaped_name} › {}", html_escape(&top.title))
+    } else {
+        escaped_name.clone()
+    };
+
+    let subtitle = if let Some(top) = ctx.current_topic {
+        format!("{} messages", top.total_messages)
+    } else if let Some(un) = &ctx.current_peer.username {
         format!(
             "@{} &bull; {} messages",
             html_escape(un),
@@ -168,6 +236,12 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         ctx.available_avatars,
     );
 
+    let has_topics_cls = if !ctx.topics.is_empty() {
+        " has-topics"
+    } else {
+        ""
+    };
+
     format!(
         r##"<!DOCTYPE html>
 <html lang="en" {theme_attr}>
@@ -201,7 +275,7 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
   <div style="display: none;">
     {SYMBOLS_SVG}
   </div>
-  <div class="app-container">
+  <div class="app-container{has_topics_cls}">
     <aside class="sidebar">
       <div class="sidebar-header">
         <a href="../../index.html" class="sidebar-title" style="color: inherit;">← All Chats</a>
@@ -218,13 +292,14 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         {dialogs_html}
       </ul>
     </aside>
+    {topics_sidebar_html}
 
     <main class="chat-pane">
       <header class="chat-header">
         <div class="chat-title-info" title="Click to view chat info" style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
           {header_avatar}
           <div>
-            <h2>{escaped_name}</h2>
+            <h2>{display_title}</h2>
             <div class="chat-subtitle">{subtitle}</div>
           </div>
         </div>
