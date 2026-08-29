@@ -139,6 +139,20 @@ impl Default for ExportOptions {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenderTopic {
+    pub topic_id: i32,
+    pub title: String,
+    pub icon_color: Option<i32>,
+    pub icon_emoji_id: Option<i64>,
+    pub total_messages: usize,
+    pub last_message_date: Option<i64>,
+    pub is_general: bool,
+    pub is_closed: bool,
+    pub is_pinned: bool,
+    pub is_hidden: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderPeer {
     pub peer_id: PeerId,
@@ -148,6 +162,8 @@ pub struct RenderPeer {
     pub phone: Option<String>,
     pub total_messages: usize,
     pub last_message_date: Option<i64>,
+    pub is_forum: bool,
+    pub topics: Vec<RenderTopic>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
