@@ -166,7 +166,7 @@ impl<'a> HtmlArchiveExporter<'a> {
                 });
 
             let is_forum = peer.raw_tl.as_ref().is_some_and(|raw| {
-                tl::enums::Chat::from_bytes(raw).map_or(false, |c| match c {
+                tl::enums::Chat::from_bytes(raw).is_ok_and(|c| match c {
                     tl::enums::Chat::Channel(chan) => chan.forum,
                     _ => false,
                 })
@@ -273,11 +273,16 @@ impl<'a> HtmlArchiveExporter<'a> {
                             .get(&tid)
                             .map(|v| v.as_slice())
                             .unwrap_or(&[]);
+                        let icon_asset_path = meta.icon_emoji_id.and_then(|doc_id| {
+                            resolve_topic_icon_asset(doc_id, self.options.media_src_dir.as_deref())
+                        });
+
                         RenderTopic {
                             topic_id: tid,
                             title: meta.title.clone(),
                             icon_color: meta.icon_color,
                             icon_emoji_id: meta.icon_emoji_id,
+                            icon_asset: icon_asset_path,
                             total_messages: msgs_slice.len(),
                             last_message_date: msgs_slice.last().map(|m| m.date),
                             is_general: tid == 1,
@@ -454,9 +459,9 @@ impl<'a> HtmlArchiveExporter<'a> {
 
                     let mut render_messages = Vec::with_capacity(raw_msgs.len());
                     for m in raw_msgs {
-                        let is_srv = m.raw_tl.as_ref().map_or(false, |raw| {
+                        let is_srv = m.raw_tl.as_ref().is_some_and(|raw| {
                             tl::enums::Message::from_bytes(raw)
-                                .map_or(false, |t| matches!(t, tl::enums::Message::Service(_)))
+                                .is_ok_and(|t| matches!(t, tl::enums::Message::Service(_)))
                         });
 
                         if !self.options.include_service_messages && is_srv {
@@ -655,7 +660,7 @@ impl<'a> HtmlArchiveExporter<'a> {
         let current_peer = self.db.get_peer(msg.key.peer_id).ok().flatten();
         let is_channel = current_peer
             .as_ref()
-            .map_or(false, |p| p.peer_type == PeerType::Channel);
+            .is_some_and(|p| p.peer_type == PeerType::Channel);
 
         let (sender_name, is_channel_post) = if let Some(sid) = msg.sender_id {
             let name = self
@@ -1271,8 +1276,49 @@ impl<'a> HtmlArchiveExporter<'a> {
             );
         }
 
+        let export_icons_dir = export_media_dir.join("icons");
+        fs::create_dir_all(&export_icons_dir)?;
+
+        if let Some(src_icons_dir) = find_subdir("icons") {
+            copied_count += materialize_dir_contents(
+                &src_icons_dir,
+                &export_icons_dir,
+                self.options.media_mode,
+                hasher,
+            );
+        }
+
         Ok(copied_count)
     }
+}
+
+fn resolve_topic_icon_asset(doc_id: i64, media_src_dir: Option<&Path>) -> Option<String> {
+    let src_base = media_src_dir?;
+
+    let candidates = [
+        ("reactions", format!("reactions/{doc_id}.webp")),
+        ("reactions", format!("media/reactions/{doc_id}.webp")),
+        ("reactions", format!("reactions/{doc_id}.png")),
+        ("reactions", format!("media/reactions/{doc_id}.png")),
+        ("icons", format!("icons/{doc_id}.webp")),
+        ("icons", format!("media/icons/{doc_id}.webp")),
+        ("icons", format!("icons/{doc_id}.png")),
+        ("icons", format!("media/icons/{doc_id}.png")),
+    ];
+
+    for (sub_category, rel_path) in candidates {
+        let full_path = src_base.join(&rel_path);
+        if full_path.is_file() {
+            let export_rel = if rel_path.ends_with(".png") {
+                format!("media/{sub_category}/{doc_id}.png")
+            } else {
+                format!("media/{sub_category}/{doc_id}.webp")
+            };
+            return Some(ArchiveUrlBuilder::media_url(2, &export_rel));
+        }
+    }
+
+    None
 }
 
 fn materialize_file(src: &Path, dst: &Path, mode: MediaMode) -> RenderResult<()> {

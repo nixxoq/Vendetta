@@ -145,6 +145,7 @@ pub struct RenderTopic {
     pub title: String,
     pub icon_color: Option<i32>,
     pub icon_emoji_id: Option<i64>,
+    pub icon_asset: Option<String>,
     pub total_messages: usize,
     pub last_message_date: Option<i64>,
     pub is_general: bool,
