@@ -279,82 +279,154 @@ a:hover {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .topics-header {
-  padding: 1rem;
+  padding: 0.875rem 1rem;
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .topics-heading {
   font-weight: 700;
-  font-size: 1.125rem;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .topics-list {
   flex: 1;
   overflow-y: auto;
   list-style: none;
-  padding: 0.5rem 0;
+  padding: 0.5rem;
   margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .topic-item {
-  margin: 0 0.5rem 2px 0.5rem;
-  border-radius: 8px;
-  transition: background-color 0.15s;
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
 }
 
 .topic-link {
   display: flex;
   align-items: center;
-  gap: 0.625rem;
-  padding: 0.625rem 0.75rem;
+  gap: 0.5rem;
+  padding: 0.375rem 0.625rem;
   color: inherit;
   text-decoration: none;
-  border-radius: 8px;
+  border-radius: 6px;
+  min-height: 38px;
+  box-sizing: border-box;
 }
 
-.topic-item:hover, .topic-item.active {
+.topic-item:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="dark"] .topic-item:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.topic-item.active {
   background-color: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
 }
 
 .topic-icon {
-  font-size: 1.125rem;
+  font-size: 0.9375rem;
   font-weight: 800;
   color: var(--accent-color);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 4px;
+  background: var(--bg-system-event);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.topic-icon-img {
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 4px;
+  object-fit: contain;
   flex-shrink: 0;
 }
 
 .topic-title {
-  font-weight: 600;
+  font-weight: 500;
   font-size: 0.875rem;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--text-primary);
 }
 
 .topic-count {
   font-size: 0.75rem;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  padding: 2px 6px;
+  background: var(--bg-system-event);
+  border: 1px solid transparent;
+  padding: 0.125rem 0.375rem;
   border-radius: 10px;
   color: var(--text-secondary);
+  font-weight: 500;
+  flex-shrink: 0;
 }
 
 .topic-item.active .topic-count {
   background: var(--accent-color);
   color: #fff;
-  border-color: var(--accent-color);
+}
+
+/* Compact mode (for topics) */
+[data-compact-topics="true"] .topics-list,
+.topics-sidebar.compact-mode .topics-list {
+  padding: 0.375rem;
+  gap: 1px;
+}
+
+[data-compact-topics="true"] .topic-link,
+.topics-sidebar.compact-mode .topic-link {
+  padding: 0.25rem 0.5rem;
+  min-height: 28px;
+  gap: 0.375rem;
+}
+
+[data-compact-topics="true"] .topic-icon,
+.topics-sidebar.compact-mode .topic-icon {
+  width: 1.125rem;
+  height: 1.125rem;
+  font-size: 0.75rem;
+  border-radius: 3px;
+}
+
+[data-compact-topics="true"] .topic-icon-img,
+.topics-sidebar.compact-mode .topic-icon-img {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+[data-compact-topics="true"] .topic-title,
+.topics-sidebar.compact-mode .topic-title {
+  font-size: 0.8125rem;
+}
+
+[data-compact-topics="true"] .topic-count,
+.topics-sidebar.compact-mode .topic-count {
+  font-size: 0.6875rem;
+  padding: 0.0625rem 0.25rem;
+  border-radius: 6px;
 }
 
 /* Chat Pane */
@@ -828,6 +900,40 @@ a:hover {
   .sidebar {
     width: 100%;
     height: 240px;
+  }
+  .topics-sidebar {
+    width: 100%;
+    height: auto;
+    max-height: 180px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .topics-list {
+    padding: 0.375rem;
+    gap: 1px;
+  }
+  .topic-link {
+    padding: 0.25rem 0.5rem;
+    min-height: 28px;
+    gap: 0.375rem;
+  }
+  .topic-icon {
+    width: 1.125rem;
+    height: 1.125rem;
+    font-size: 0.75rem;
+    border-radius: 3px;
+  }
+  .topic-icon-img {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+  .topic-title {
+    font-size: 0.8125rem;
+  }
+  .topic-count {
+    font-size: 0.6875rem;
+    padding: 0.0625rem 0.25rem;
+    border-radius: 6px;
   }
   .chat-messages {
     padding: 1rem;

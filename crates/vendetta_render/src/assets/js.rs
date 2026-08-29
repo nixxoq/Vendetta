@@ -154,9 +154,28 @@ pub const APP_JS: &str = r#"(function() {
     });
   }
 
+  function initCompactTopics() {
+    const toggleBtn = document.getElementById('compact-topics-toggle');
+    if (!toggleBtn) return;
+
+    toggleBtn.addEventListener('click', () => {
+      const isCompact = document.documentElement.getAttribute('data-compact-topics') === 'true';
+      const next = !isCompact;
+      if (next) {
+        document.documentElement.setAttribute('data-compact-topics', 'true');
+      } else {
+        document.documentElement.removeAttribute('data-compact-topics');
+      }
+      try {
+        localStorage.setItem('vendetta-compact-topics', next ? 'true' : 'false');
+      } catch (e) {}
+    });
+  }
+
   window.addEventListener('hashchange', highlightAnchor);
   window.addEventListener('DOMContentLoaded', () => {
     initTheme();
+    initCompactTopics();
     initSpoilers();
     initBlockquotes();
     highlightAnchor();
