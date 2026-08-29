@@ -2,7 +2,7 @@ use std::{collections::HashMap, fs, sync::Arc};
 use tokio::{fs as tokio_fs, io::AsyncWriteExt};
 use tracing::{debug, warn};
 
-use grammers_tl_types::{self as tl, Serializable};
+use grammers_tl_types::{self as tl, Deserializable, Serializable};
 use vendetta_storage::ArchiveDb;
 use vendetta_tg_adapter::TelegramAdapter;
 
@@ -193,7 +193,42 @@ where
 {
     storage_layout.ensure_dirs()?;
 
-    let all_doc_ids = db.list_custom_emoji_reaction_document_ids()?;
+    let mut all_doc_ids: std::collections::BTreeSet<i64> = db
+        .list_custom_emoji_reaction_document_ids()?
+        .into_iter()
+        .collect();
+
+    let _ = db.with_conn(|conn| {
+        let mut stmt = conn.prepare("SELECT raw_tl FROM messages WHERE raw_tl IS NOT NULL;")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let raw_opt: Option<Vec<u8>> = row.get(0)?;
+            if let Some(raw) = raw_opt
+                && let Ok(tl::enums::Message::Service(srv)) = tl::enums::Message::from_bytes(&raw)
+            {
+                match srv.action {
+                    tl::enums::MessageAction::TopicCreate(tc) => {
+                        if let Some(doc_id) = tc.icon_emoji_id
+                            && doc_id != 0
+                        {
+                            all_doc_ids.insert(doc_id);
+                        }
+                    }
+                    tl::enums::MessageAction::TopicEdit(te) => {
+                        if let Some(doc_id) = te.icon_emoji_id
+                            && doc_id != 0
+                        {
+                            all_doc_ids.insert(doc_id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    });
+
+    let all_doc_ids: Vec<i64> = all_doc_ids.into_iter().collect();
 
     let mut summary = CustomReactionSyncSummary {
         total_discovered: all_doc_ids.len(),
