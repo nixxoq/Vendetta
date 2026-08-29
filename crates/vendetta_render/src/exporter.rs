@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
@@ -24,6 +24,7 @@ use crate::{
     model::{
         ExportOptions, ExportSummary, MediaMode, RenderForwardInfo, RenderMediaItem, RenderMessage,
         RenderPeer, RenderReactionGroup, RenderReactionKey, RenderReactor, RenderRevision,
+        RenderTopic,
     },
     navigation::DateNavigator,
     reply::{ReplyLocationMap, ReplyResolver},
@@ -31,6 +32,17 @@ use crate::{
     url_builder::ArchiveUrlBuilder,
     verifier::HtmlArchiveVerifier,
 };
+
+// TODO: move to vendetta_model/src/topics.rs (new file)
+#[derive(Default)]
+struct DiscoveredTopicMeta {
+    title: String,
+    icon_color: Option<i32>,
+    icon_emoji_id: Option<i64>,
+    is_closed: bool,
+    is_pinned: bool,
+    is_hidden: bool,
+}
 
 pub struct HtmlArchiveExporter<'a> {
     db: &'a ArchiveDb,
@@ -136,6 +148,8 @@ impl<'a> HtmlArchiveExporter<'a> {
         let mut render_peers = Vec::with_capacity(all_peers_raw.len());
         let mut location_map = ReplyLocationMap::new();
         let mut peer_message_counts = HashMap::new();
+        let mut forum_topic_messages: HashMap<PeerId, BTreeMap<i32, Vec<MessageRecord>>> =
+            HashMap::new();
 
         for peer in &all_peers_raw {
             let count = self.db.count_messages_by_peer(peer.peer_id)?;
@@ -151,16 +165,14 @@ impl<'a> HtmlArchiveExporter<'a> {
                         .unwrap_or_else(|| format!("Chat {}", peer.peer_id.raw()))
                 });
 
-            render_peers.push(RenderPeer {
-                peer_id: peer.peer_id,
-                peer_type: peer.peer_type,
-                name: authoritative_name,
-                username: peer.username.clone(),
-                phone: peer.phone.clone(),
-                total_messages: count,
-                last_message_date: last_date,
+            let is_forum = peer.raw_tl.as_ref().is_some_and(|raw| {
+                tl::enums::Chat::from_bytes(raw).map_or(false, |c| match c {
+                    tl::enums::Chat::Channel(chan) => chan.forum,
+                    _ => false,
+                })
             });
 
+            let mut all_msgs = Vec::with_capacity(count);
             let mut offset = 0;
             const SCAN_BATCH: usize = 1000;
             loop {
@@ -171,16 +183,153 @@ impl<'a> HtmlArchiveExporter<'a> {
                     break;
                 }
                 let batch_len = msgs.len();
-                for (idx_in_chat, msg) in msgs.into_iter().enumerate() {
-                    let global_idx = offset + idx_in_chat;
-                    let page_idx = global_idx / self.options.chunk_size;
-                    location_map.insert(msg.key, page_idx);
-                }
+                all_msgs.extend(msgs);
                 if batch_len < SCAN_BATCH {
                     break;
                 }
                 offset += batch_len;
             }
+
+            let (is_forum_peer, topics) = if is_forum {
+                let mut discovered_topics = BTreeMap::from([(
+                    1,
+                    DiscoveredTopicMeta {
+                        title: "General".to_string(),
+                        icon_color: None,
+                        icon_emoji_id: None,
+                        is_closed: false,
+                        is_pinned: false,
+                        is_hidden: false,
+                    },
+                )]);
+
+                for msg in &all_msgs {
+                    if let Some(ref raw) = msg.raw_tl
+                        && let Ok(tl::enums::Message::Service(s)) =
+                            tl::enums::Message::from_bytes(raw)
+                    {
+                        match &s.action {
+                            tl::enums::MessageAction::TopicCreate(tc) => {
+                                discovered_topics.insert(
+                                    msg.key.message_id.raw() as i32,
+                                    DiscoveredTopicMeta {
+                                        title: tc.title.clone(),
+                                        icon_color: Some(tc.icon_color),
+                                        icon_emoji_id: tc.icon_emoji_id,
+                                        is_closed: false,
+                                        is_pinned: false,
+                                        is_hidden: false,
+                                    },
+                                );
+                            }
+                            tl::enums::MessageAction::TopicEdit(te) => {
+                                let target_tid = msg
+                                    .reply_to_top_id
+                                    .map(|t| t.raw() as i32)
+                                    .unwrap_or_else(|| {
+                                        if let Some(tl::enums::MessageReplyHeader::Header(h)) =
+                                            &s.reply_to
+                                        {
+                                            h.reply_to_top_id.or(h.reply_to_msg_id).unwrap_or(1)
+                                        } else {
+                                            1
+                                        }
+                                    });
+
+                                if let Some(entry) = discovered_topics.get_mut(&target_tid) {
+                                    if let Some(ref title) = te.title {
+                                        entry.title = title.clone();
+                                    }
+                                    if let Some(closed) = te.closed {
+                                        entry.is_closed = closed;
+                                    }
+                                    if let Some(hidden) = te.hidden {
+                                        entry.is_hidden = hidden;
+                                    }
+                                    if let Some(icon) = te.icon_emoji_id {
+                                        entry.icon_emoji_id = Some(icon);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                let mut topic_messages: BTreeMap<i32, Vec<MessageRecord>> = discovered_topics
+                    .keys()
+                    .map(|&tid| (tid, Vec::new()))
+                    .collect();
+
+                for msg in all_msgs {
+                    let resolved_tid = Self::resolve_message_topic_id(&msg, &discovered_topics);
+                    topic_messages.entry(resolved_tid).or_default().push(msg);
+                }
+
+                let mut peer_topics: Vec<_> = discovered_topics
+                    .iter()
+                    .map(|(&tid, meta)| {
+                        let msgs_slice = topic_messages
+                            .get(&tid)
+                            .map(|v| v.as_slice())
+                            .unwrap_or(&[]);
+                        RenderTopic {
+                            topic_id: tid,
+                            title: meta.title.clone(),
+                            icon_color: meta.icon_color,
+                            icon_emoji_id: meta.icon_emoji_id,
+                            total_messages: msgs_slice.len(),
+                            last_message_date: msgs_slice.last().map(|m| m.date),
+                            is_general: tid == 1,
+                            is_closed: meta.is_closed,
+                            is_pinned: meta.is_pinned,
+                            is_hidden: meta.is_hidden,
+                        }
+                    })
+                    .collect();
+
+                peer_topics.sort_by(|a, b| {
+                    b.is_pinned
+                        .cmp(&a.is_pinned)
+                        .then_with(|| (b.topic_id == 1).cmp(&(a.topic_id == 1)))
+                        .then_with(|| {
+                            b.last_message_date
+                                .unwrap_or(0)
+                                .cmp(&a.last_message_date.unwrap_or(0))
+                        })
+                        .then_with(|| a.topic_id.cmp(&b.topic_id))
+                });
+
+                for topic in &peer_topics {
+                    if let Some(t_msgs) = topic_messages.get(&topic.topic_id) {
+                        for (idx_in_topic, msg) in t_msgs.iter().enumerate() {
+                            let page_idx = idx_in_topic / self.options.chunk_size;
+                            location_map.insert(msg.key, page_idx, Some(topic.topic_id));
+                        }
+                    }
+                }
+
+                forum_topic_messages.insert(peer.peer_id, topic_messages);
+                (true, peer_topics)
+            } else {
+                for (idx_in_chat, msg) in all_msgs.into_iter().enumerate() {
+                    let page_idx = idx_in_chat / self.options.chunk_size;
+                    location_map.insert(msg.key, page_idx, None);
+                }
+                (false, Vec::new())
+            };
+
+            render_peers.push(RenderPeer {
+                peer_id: peer.peer_id,
+                peer_type: peer.peer_type,
+                name: authoritative_name,
+                username: peer.username.clone(),
+                phone: peer.phone.clone(),
+                total_messages: count,
+                last_message_date: last_date,
+                is_forum: is_forum_peer,
+                topics,
+            });
         }
 
         summary.dialogs_count = render_peers.len();
@@ -236,129 +385,178 @@ impl<'a> HtmlArchiveExporter<'a> {
         let exported_peer_ids: HashSet<PeerId> = render_peers.iter().map(|p| p.peer_id).collect();
 
         for current_peer in &render_peers {
-            let total_msgs = *peer_message_counts.get(&current_peer.peer_id).unwrap_or(&0);
-            let total_pages = if total_msgs == 0 {
-                1
-            } else {
-                total_msgs.div_ceil(self.options.chunk_size)
-            };
-
             let peer_chat_dir = chats_dir.join(ArchiveUrlBuilder::peer_token(current_peer.peer_id));
             fs::create_dir_all(&peer_chat_dir)?;
 
-            let mut date_navigator = DateNavigator::new();
-            if self.options.build_date_index {
-                let peer_dates = self.db.list_message_dates_by_peer(current_peer.peer_id)?;
-                for (msg_idx, date) in peer_dates.into_iter().enumerate() {
-                    let p_idx = msg_idx / self.options.chunk_size;
-                    date_navigator.record_message_date(date, p_idx);
+            let units: Vec<(Option<&RenderTopic>, Option<i32>, Vec<MessageRecord>)> =
+                if current_peer.is_forum && !current_peer.topics.is_empty() {
+                    let topic_msgs_map = forum_topic_messages.get(&current_peer.peer_id);
+                    current_peer
+                        .topics
+                        .iter()
+                        .map(|t| {
+                            let msgs = topic_msgs_map
+                                .and_then(|m| m.get(&t.topic_id))
+                                .cloned()
+                                .unwrap_or_default();
+                            (Some(t), Some(t.topic_id), msgs)
+                        })
+                        .collect()
+                } else {
+                    let total_msgs = *peer_message_counts.get(&current_peer.peer_id).unwrap_or(&0);
+                    let mut msgs = Vec::with_capacity(total_msgs);
+                    let mut offset = 0;
+                    const SCAN_BATCH: usize = 1000;
+                    loop {
+                        let batch = self.db.list_messages_by_peer(
+                            current_peer.peer_id,
+                            SCAN_BATCH,
+                            offset,
+                        )?;
+                        if batch.is_empty() {
+                            break;
+                        }
+                        let len = batch.len();
+                        msgs.extend(batch);
+                        if len < SCAN_BATCH {
+                            break;
+                        }
+                        offset += len;
+                    }
+                    vec![(None, None, msgs)]
+                };
+
+            for (topic_opt, topic_id_opt, msgs_for_unit) in &units {
+                let total_msgs = msgs_for_unit.len();
+                let total_pages = if total_msgs == 0 {
+                    1
+                } else {
+                    total_msgs.div_ceil(self.options.chunk_size)
+                };
+
+                let mut date_navigator = DateNavigator::new();
+                if self.options.build_date_index {
+                    for (msg_idx, m) in msgs_for_unit.iter().enumerate() {
+                        let p_idx = msg_idx / self.options.chunk_size;
+                        date_navigator.record_message_date(m.date, p_idx);
+                    }
                 }
-            }
 
-            for page_idx in 0..total_pages {
-                let offset = page_idx * self.options.chunk_size;
-                let raw_msgs = self.db.list_messages_by_peer(
-                    current_peer.peer_id,
-                    self.options.chunk_size,
-                    offset,
-                )?;
-
-                let mut render_messages = Vec::with_capacity(raw_msgs.len());
-
-                for m in raw_msgs {
-                    let is_srv = if let Some(ref raw) = m.raw_tl {
-                        tl::enums::Message::from_bytes(raw)
-                            .map(|t| matches!(t, tl::enums::Message::Service(_)))
-                            .unwrap_or(false)
+                for page_idx in 0..total_pages {
+                    let chunk_start = page_idx * self.options.chunk_size;
+                    let chunk_end =
+                        (chunk_start + self.options.chunk_size).min(msgs_for_unit.len());
+                    let raw_msgs = if chunk_start < msgs_for_unit.len() {
+                        &msgs_for_unit[chunk_start..chunk_end]
                     } else {
-                        false
+                        &[]
                     };
 
-                    if !self.options.include_service_messages && is_srv {
-                        continue;
-                    }
-                    if !self.options.include_deleted_messages && m.state == MessageState::Deleted {
-                        continue;
+                    let mut render_messages = Vec::with_capacity(raw_msgs.len());
+                    for m in raw_msgs {
+                        let is_srv = m.raw_tl.as_ref().map_or(false, |raw| {
+                            tl::enums::Message::from_bytes(raw)
+                                .map_or(false, |t| matches!(t, tl::enums::Message::Service(_)))
+                        });
+
+                        if !self.options.include_service_messages && is_srv {
+                            continue;
+                        }
+                        if !self.options.include_deleted_messages
+                            && m.state == MessageState::Deleted
+                        {
+                            continue;
+                        }
+
+                        if m.state == MessageState::Deleted {
+                            summary.deleted_messages_count += 1;
+                        }
+                        if m.state == MessageState::Edited {
+                            summary.edited_messages_count += 1;
+                        }
+
+                        content_hasher.update(m.key.peer_id.raw().to_le_bytes());
+                        content_hasher.update(m.key.message_id.raw().to_le_bytes());
+                        content_hasher.update(m.date.to_le_bytes());
+                        content_hasher.update(m.state.as_ref().as_bytes());
+                        if let Some(txt) = &m.text {
+                            content_hasher.update(txt.as_bytes());
+                        }
+
+                        let r_msg = self.build_render_message(
+                            m,
+                            &reply_resolver,
+                            &available_avatars,
+                            &exported_peer_ids,
+                        )?;
+                        render_messages.push(r_msg);
+                        total_rendered_messages += 1;
                     }
 
-                    if m.state == MessageState::Deleted {
-                        summary.deleted_messages_count += 1;
-                    }
-                    if m.state == MessageState::Edited {
-                        summary.edited_messages_count += 1;
-                    }
+                    let first_gid = render_messages.first().and_then(|m| m.grouped_id);
+                    let last_gid = render_messages.last().and_then(|m| m.grouped_id);
 
-                    content_hasher.update(m.key.peer_id.raw().to_le_bytes());
-                    content_hasher.update(m.key.message_id.raw().to_le_bytes());
-                    content_hasher.update(m.date.to_le_bytes());
-                    content_hasher.update(m.state.as_ref().as_bytes());
-                    if let Some(txt) = &m.text {
-                        content_hasher.update(txt.as_bytes());
-                    }
+                    let cont_prev_gid = if page_idx > 0 && first_gid.is_some() && chunk_start > 0 {
+                        msgs_for_unit
+                            .get(chunk_start - 1)
+                            .and_then(|m| m.grouped_id)
+                            .filter(|&gid| Some(gid) == first_gid)
+                    } else {
+                        None
+                    };
 
-                    let r_msg = self.build_render_message(
-                        &m,
-                        &reply_resolver,
-                        &available_avatars,
-                        &exported_peer_ids,
-                    )?;
-                    render_messages.push(r_msg);
-                    total_rendered_messages += 1;
+                    let cont_next_gid = if (page_idx + 1) < total_pages && last_gid.is_some() {
+                        msgs_for_unit
+                            .get(chunk_end)
+                            .and_then(|m| m.grouped_id)
+                            .filter(|&gid| Some(gid) == last_gid)
+                    } else {
+                        None
+                    };
+
+                    let render_items = group_messages_into_render_items(
+                        render_messages,
+                        cont_prev_gid,
+                        cont_next_gid,
+                    );
+
+                    let date_nav_html = if self.options.build_date_index {
+                        Some(
+                            date_navigator
+                                .render_date_jump_menu(current_peer.peer_id, *topic_id_opt),
+                        )
+                    } else {
+                        None
+                    };
+
+                    let page_ctx = DialogPageContext {
+                        current_peer,
+                        all_peers: &render_peers,
+                        current_topic: *topic_opt,
+                        topics: if current_peer.is_forum {
+                            &current_peer.topics
+                        } else {
+                            &[]
+                        },
+                        items: &render_items,
+                        page_index: page_idx,
+                        total_pages,
+                        presentation_mode: self.options.presentation_mode,
+                        theme: self.options.theme,
+                        date_nav_html: date_nav_html.as_deref(),
+                        available_avatars: &available_avatars,
+                    };
+
+                    let page_html = render_dialog_page(&page_ctx);
+                    let page_file_name = if let Some(tid) = *topic_id_opt {
+                        ArchiveUrlBuilder::topic_page_file_name(tid, page_idx)
+                    } else {
+                        ArchiveUrlBuilder::page_file_name(page_idx)
+                    };
+
+                    fs::write(peer_chat_dir.join(&page_file_name), &page_html)?;
+                    total_chunks += 1;
                 }
-
-                let first_gid = render_messages.first().and_then(|m| m.grouped_id);
-                let last_gid = render_messages.last().and_then(|m| m.grouped_id);
-
-                let cont_prev_gid = if page_idx > 0 && first_gid.is_some() && offset > 0 {
-                    self.db
-                        .list_messages_by_peer(current_peer.peer_id, 1, offset - 1)?
-                        .first()
-                        .and_then(|m| m.grouped_id)
-                        .filter(|&gid| Some(gid) == first_gid)
-                } else {
-                    None
-                };
-
-                let cont_next_gid = if (page_idx + 1) < total_pages && last_gid.is_some() {
-                    self.db
-                        .list_messages_by_peer(
-                            current_peer.peer_id,
-                            1,
-                            offset + self.options.chunk_size,
-                        )?
-                        .first()
-                        .and_then(|m| m.grouped_id)
-                        .filter(|&gid| Some(gid) == last_gid)
-                } else {
-                    None
-                };
-
-                let render_items =
-                    group_messages_into_render_items(render_messages, cont_prev_gid, cont_next_gid);
-
-                let date_nav_html = if self.options.build_date_index {
-                    Some(date_navigator.render_date_jump_menu(current_peer.peer_id))
-                } else {
-                    None
-                };
-
-                let page_ctx = DialogPageContext {
-                    current_peer,
-                    all_peers: &render_peers,
-                    items: &render_items,
-                    page_index: page_idx,
-                    total_pages,
-                    presentation_mode: self.options.presentation_mode,
-                    theme: self.options.theme,
-                    date_nav_html: date_nav_html.as_deref(),
-                    available_avatars: &available_avatars,
-                };
-
-                let page_html = render_dialog_page(&page_ctx);
-                let page_file_name = ArchiveUrlBuilder::page_file_name(page_idx);
-                fs::write(peer_chat_dir.join(page_file_name), page_html)?;
-
-                total_chunks += 1;
             }
         }
 
@@ -394,27 +592,28 @@ impl<'a> HtmlArchiveExporter<'a> {
     }
 
     pub fn resolve_authoritative_title(&self, peer_id: PeerId) -> RenderResult<String> {
+        let is_valid = |s: &str| {
+            let t = s.trim();
+            !t.is_empty() && t != "Unknown"
+        };
+
         if let Some(peer) = self.db.get_peer(peer_id).ok().flatten() {
-            if let Some(name) = &peer.name {
-                let trimmed = name.trim();
-                if !trimmed.is_empty() && trimmed != "Unknown" {
-                    return Ok(trimmed.to_string());
-                }
+            if let Some(name) = &peer.name
+                && is_valid(name)
+            {
+                return Ok(name.trim().to_string());
             }
 
-            // i added two fallbacks cuz mtproto sucks:
-
-            // First, retrieve chat/group/user title directly from Raw TL
             if let Some(ref raw) = peer.raw_tl {
-                if let Ok(tl::enums::Chat::Channel(c)) = tl::enums::Chat::from_bytes(raw) {
-                    let t = c.title.trim();
-                    if !t.is_empty() && t != "Unknown" {
-                        return Ok(t.to_string());
-                    }
-                } else if let Ok(tl::enums::Chat::Chat(c)) = tl::enums::Chat::from_bytes(raw) {
-                    let t = c.title.trim();
-                    if !t.is_empty() && t != "Unknown" {
-                        return Ok(t.to_string());
+                if let Ok(tl_chat) = tl::enums::Chat::from_bytes(raw) {
+                    match tl_chat {
+                        tl::enums::Chat::Channel(c) if is_valid(&c.title) => {
+                            return Ok(c.title.trim().to_string());
+                        }
+                        tl::enums::Chat::Chat(c) if is_valid(&c.title) => {
+                            return Ok(c.title.trim().to_string());
+                        }
+                        _ => {}
                     }
                 } else if let Ok(tl::enums::User::User(u)) = tl::enums::User::from_bytes(raw) {
                     let full = match (&u.first_name, &u.last_name) {
@@ -423,14 +622,12 @@ impl<'a> HtmlArchiveExporter<'a> {
                         (None, Some(l)) => l.clone(),
                         (None, None) => u.username.clone().unwrap_or_default(),
                     };
-                    let trimmed = full.trim();
-                    if !trimmed.is_empty() && trimmed != "Unknown" {
-                        return Ok(trimmed.to_string());
+                    if is_valid(&full) {
+                        return Ok(full.trim().to_string());
                     }
                 }
             }
 
-            // If not, use fucking username
             if let Some(uname) = &peer.username {
                 let u = uname.trim();
                 if !u.is_empty() {
@@ -439,13 +636,10 @@ impl<'a> HtmlArchiveExporter<'a> {
             }
         }
 
-        // Oh yeah, i cooked cringe fallback, but it works lol
-        // for channels only
-        if let Ok(Some(title)) = self.db.find_creation_or_title_change(peer_id) {
-            let t = title.trim();
-            if !t.is_empty() && t != "Unknown" {
-                return Ok(t.to_string());
-            }
+        if let Ok(Some(title)) = self.db.find_creation_or_title_change(peer_id)
+            && is_valid(&title)
+        {
+            return Ok(title.trim().to_string());
         }
 
         Ok(format!("Chat {}", peer_id.raw()))
@@ -461,8 +655,7 @@ impl<'a> HtmlArchiveExporter<'a> {
         let current_peer = self.db.get_peer(msg.key.peer_id).ok().flatten();
         let is_channel = current_peer
             .as_ref()
-            .map(|p| p.peer_type == PeerType::Channel)
-            .unwrap_or(false);
+            .map_or(false, |p| p.peer_type == PeerType::Channel);
 
         let (sender_name, is_channel_post) = if let Some(sid) = msg.sender_id {
             let name = self
@@ -470,7 +663,6 @@ impl<'a> HtmlArchiveExporter<'a> {
                 .unwrap_or_else(|_| format!("User {}", sid.raw()));
             (Some(name), false)
         } else if is_channel {
-            // In broadcast channels, sender is the channel itself!
             let name = self
                 .resolve_authoritative_title(msg.key.peer_id)
                 .unwrap_or_else(|_| format!("Channel {}", msg.key.peer_id.raw()));
@@ -485,17 +677,20 @@ impl<'a> HtmlArchiveExporter<'a> {
         let mut comments_count = None;
         let mut has_comments = false;
 
-        // get comments (replies) from channel
         if let Some(ref raw) = msg.raw_tl {
             if let Ok(tl::enums::Message::Service(s)) = tl::enums::Message::from_bytes(raw) {
                 is_service = true;
-                service_description = if let Some(t) = &msg.text
+                let formatted = format_service_action(&s.action);
+                if formatted != "Service event" {
+                    service_description = Some(formatted);
+                } else if let Some(t) = &msg.text
                     && !t.trim().is_empty()
+                    && t != "Service action"
                 {
-                    Some(t.clone())
+                    service_description = Some(t.clone());
                 } else {
-                    Some(format_service_action(&s.action))
-                };
+                    service_description = Some(formatted);
+                }
             } else if let Ok(tl::enums::Message::Message(m)) = tl::enums::Message::from_bytes(raw) {
                 author_signature = m.post_author;
                 if let Some(tl::enums::MessageReplies::Replies(r)) = m.replies {
@@ -512,11 +707,22 @@ impl<'a> HtmlArchiveExporter<'a> {
             .as_deref()
             .map(|t| render_formatted_text(t, msg.entities_json.as_deref()));
 
-        let reply_preview = msg.reply_to_msg_id.map(|target_id| {
+        let is_forum_topic_root = if let Some(ref raw) = msg.raw_tl
+            && let Ok(tl::enums::Message::Message(m)) = tl::enums::Message::from_bytes(raw)
+            && let Some(tl::enums::MessageReplyHeader::Header(h)) = &m.reply_to
+        {
+            h.forum_topic && h.reply_to_top_id.is_none()
+        } else {
+            false
+        };
+
+        let reply_preview = if !is_forum_topic_root && let Some(target_id) = msg.reply_to_msg_id {
             let target_peer = msg.reply_to_peer_id.unwrap_or(msg.key.peer_id);
             let target_key = MessageKey::new(target_peer, target_id);
-            reply_resolver.resolve_reply(msg.key.peer_id, target_key)
-        });
+            Some(reply_resolver.resolve_reply(msg.key.peer_id, target_key))
+        } else {
+            None
+        };
 
         let forward_info = self.resolve_forward_info(msg, available_avatars, exported_peer_ids);
 
@@ -915,6 +1121,47 @@ impl<'a> HtmlArchiveExporter<'a> {
         })
     }
 
+    fn resolve_message_topic_id(
+        msg: &MessageRecord,
+        discovered_topics: &BTreeMap<i32, DiscoveredTopicMeta>,
+    ) -> i32 {
+        let Some(ref raw) = msg.raw_tl else {
+            return 1;
+        };
+        let Ok(tl_msg) = tl::enums::Message::from_bytes(raw) else {
+            return 1;
+        };
+
+        let reply_header = match tl_msg {
+            tl::enums::Message::Service(ref s) => {
+                if matches!(s.action, tl::enums::MessageAction::TopicCreate(_)) {
+                    return msg.key.message_id.raw() as i32;
+                }
+                s.reply_to.as_ref()
+            }
+            tl::enums::Message::Message(ref m) => m.reply_to.as_ref(),
+            tl::enums::Message::Empty(_) => return 1,
+        };
+
+        if let Some(top_id) = msg.reply_to_top_id {
+            return top_id.raw() as i32;
+        }
+
+        if let Some(tl::enums::MessageReplyHeader::Header(h)) = reply_header {
+            if let Some(top_id) = h.reply_to_top_id {
+                return top_id;
+            }
+            if h.forum_topic
+                && let Some(root_id) = h.reply_to_msg_id
+                && discovered_topics.contains_key(&root_id)
+            {
+                return root_id;
+            }
+        }
+
+        1
+    }
+
     fn materialize_media(
         &self,
         staging_dir: &Path,
@@ -1129,7 +1376,15 @@ fn format_service_action(action: &tl::enums::MessageAction) -> String {
         tl::enums::MessageAction::TopicCreate(t) => format!("Created topic \"{}\"", t.title),
         tl::enums::MessageAction::TopicEdit(t) => {
             if let Some(title) = &t.title {
-                format!("Edited topic title to \"{title}\"")
+                format!("Renamed topic to \"{title}\"")
+            } else if t.closed == Some(true) {
+                "Closed topic".to_string()
+            } else if t.closed == Some(false) {
+                "Reopened topic".to_string()
+            } else if t.hidden == Some(true) {
+                "Hidden topic".to_string()
+            } else if t.hidden == Some(false) {
+                "Unhidden topic".to_string()
             } else {
                 "Edited topic".to_string()
             }
@@ -1140,8 +1395,8 @@ fn format_service_action(action: &tl::enums::MessageAction) -> String {
         tl::enums::MessageAction::StarGift(_) => "Telegram Star gift".to_string(),
         tl::enums::MessageAction::StarGiftUnique(_) => "Unique Telegram Star gift".to_string(),
         tl::enums::MessageAction::ChatMigrateTo(_) => "Migrated group to supergroup".to_string(),
-        tl::enums::MessageAction::ChannelMigrateFrom(_) => {
-            "Channel migrated from group".to_string()
+        tl::enums::MessageAction::ChannelMigrateFrom(c) => {
+            format!("Supergroup migrated from basic chat {}", c.chat_id)
         }
         tl::enums::MessageAction::HistoryClear => "Cleared chat history".to_string(),
         tl::enums::MessageAction::GiftPremium(_) => "Gifted Telegram Premium".to_string(),
