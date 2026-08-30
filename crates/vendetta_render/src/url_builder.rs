@@ -21,6 +21,10 @@ impl ArchiveUrlBuilder {
         format!("page_{:05}.html", page_index + 1)
     }
 
+    pub fn unified_messages_page_file_name(page_index: usize) -> String {
+        format!("messages_page_{:05}.html", page_index + 1)
+    }
+
     pub fn topic_page_file_name(topic_id: i32, page_index: usize) -> String {
         format!("topic_{topic_id}_page_{:05}.html", page_index + 1)
     }
@@ -53,6 +57,16 @@ impl ArchiveUrlBuilder {
             raw_msg.to_string()
         };
         format!("m-{}-{}", Self::peer_token(peer_id), msg_str)
+    }
+
+    pub fn unified_message_anchor(peer_id: PeerId, message_id: MessageId) -> String {
+        let raw_msg = message_id.raw();
+        let msg_str = if raw_msg < 0 {
+            format!("neg_{}", raw_msg.unsigned_abs())
+        } else {
+            raw_msg.to_string()
+        };
+        format!("msg-{}-{}", Self::peer_token(peer_id), msg_str)
     }
 
     pub fn relative_url(from_depth: usize, target_rel_path: &str) -> String {

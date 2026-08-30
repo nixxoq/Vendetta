@@ -3,8 +3,12 @@ use crate::{
     url_builder::ArchiveUrlBuilder,
 };
 
-pub fn render_service_message(msg: &RenderMessage) -> String {
-    let anchor = ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id);
+pub fn render_service_message(msg: &RenderMessage, is_unified: bool) -> String {
+    let anchor = if is_unified {
+        ArchiveUrlBuilder::unified_message_anchor(msg.key.peer_id, msg.key.message_id)
+    } else {
+        ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id)
+    };
     let desc = msg
         .service_description
         .as_deref()
