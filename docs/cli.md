@@ -16,7 +16,7 @@ Vendetta provides a unified command-line binary (`vendetta`) for account synchro
 | `vendetta verify-media` | `--archive <PATH>`, `--media-dir <DIR>` | Validate completed media files on disk against database records. | Yes | `0, 2, 3` |
 | `vendetta media-stats` | `--archive <PATH>` | Output media object counts grouped by lifecycle state. | Yes | `0, 2, 3` |
 | `vendetta requeue-skipped` | `--archive <PATH>` | Re-queue skipped media objects for filter re-evaluation. | Yes | `0, 2, 3` |
-| `vendetta export-html` | `--archive <PATH>`, `--output <DIR>`, `--mode <MODE>`, `--media <copy\|link>`, `--theme <THEME>`, `--replace`, `--chunk-size <N>` | Export canonical SQLite archive into static offline HTML. | Yes | `0, 2, 3` |
+| `vendetta export-html` | `--archive <PATH>`, `--output <DIR>`, `--mode <MODE>`, `--media <copy\|link>`, `--disable-forum-render`, `--theme <THEME>`, `--replace`, `--chunk-size <N>` | Export canonical SQLite archive into static offline HTML. | Yes | `0, 2, 3` |
 | `vendetta verify-html` | `--html-dir <DIR>` | Audit links, message anchors, and asset paths in HTML export. | Yes | `0, 1, 2, 3` |
 | `vendetta verify-archive` | `--archive <PATH>`, `--html <DIR>`, `--fast`, `--media`, `--replies`, `--search`, `--rehash`, `--strict` | Run multi-scope audit over database, media files, and HTML. | Yes | `0, 1, 2, 3` |
 | `vendetta config` | `--show`, `--api-id <ID>`, `--api-hash <HASH>`, `--account <NAME>`, `--archive <PATH>`, `--session <PATH>`, `--media-dir <DIR>`, `--output <DIR>`, `--base-dir <DIR>` | Inspect or update persistent configuration with secrets redacted. | Yes | `0` |
