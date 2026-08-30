@@ -21,6 +21,14 @@ impl ArchiveUrlBuilder {
         format!("page_{:05}.html", page_index + 1)
     }
 
+    pub fn unified_messages_page_file_name(page_index: usize) -> String {
+        format!("messages_page_{:05}.html", page_index + 1)
+    }
+
+    pub fn topic_page_file_name(topic_id: i32, page_index: usize) -> String {
+        format!("topic_{topic_id}_page_{:05}.html", page_index + 1)
+    }
+
     pub fn peer_dir_rel(peer_id: PeerId) -> String {
         format!("chats/{}", Self::peer_token(peer_id))
     }
@@ -33,6 +41,14 @@ impl ArchiveUrlBuilder {
         )
     }
 
+    pub fn topic_chunk_file_rel(peer_id: PeerId, topic_id: i32, page_index: usize) -> String {
+        format!(
+            "{}/{}",
+            Self::peer_dir_rel(peer_id),
+            Self::topic_page_file_name(topic_id, page_index)
+        )
+    }
+
     pub fn message_anchor(peer_id: PeerId, message_id: MessageId) -> String {
         let raw_msg = message_id.raw();
         let msg_str = if raw_msg < 0 {
@@ -41,6 +57,16 @@ impl ArchiveUrlBuilder {
             raw_msg.to_string()
         };
         format!("m-{}-{}", Self::peer_token(peer_id), msg_str)
+    }
+
+    pub fn unified_message_anchor(peer_id: PeerId, message_id: MessageId) -> String {
+        let raw_msg = message_id.raw();
+        let msg_str = if raw_msg < 0 {
+            format!("neg_{}", raw_msg.unsigned_abs())
+        } else {
+            raw_msg.to_string()
+        };
+        format!("msg-{}-{}", Self::peer_token(peer_id), msg_str)
     }
 
     pub fn relative_url(from_depth: usize, target_rel_path: &str) -> String {
@@ -63,6 +89,25 @@ impl ArchiveUrlBuilder {
                 Self::peer_token(target_peer),
                 Self::page_file_name(target_page_index)
             )
+        }
+    }
+
+    pub fn topic_chunk_to_chunk_url(
+        from_peer: PeerId,
+        target_peer: PeerId,
+        target_topic_id: Option<i32>,
+        target_page_index: usize,
+    ) -> String {
+        let file_name = if let Some(tid) = target_topic_id {
+            Self::topic_page_file_name(tid, target_page_index)
+        } else {
+            Self::page_file_name(target_page_index)
+        };
+
+        if from_peer == target_peer {
+            file_name
+        } else {
+            format!("../{}/{}", Self::peer_token(target_peer), file_name)
         }
     }
 
@@ -101,6 +146,19 @@ impl ArchiveUrlBuilder {
 
     pub fn chat_root_url(from_depth: usize, peer_id: PeerId) -> String {
         let chunk = Self::chunk_file_rel(peer_id, 0);
+        Self::relative_url(from_depth, &chunk)
+    }
+
+    pub fn topic_chat_root_url(
+        from_depth: usize,
+        peer_id: PeerId,
+        default_topic_id: Option<i32>,
+    ) -> String {
+        let chunk = if let Some(tid) = default_topic_id {
+            Self::topic_chunk_file_rel(peer_id, tid, 0)
+        } else {
+            Self::chunk_file_rel(peer_id, 0)
+        };
         Self::relative_url(from_depth, &chunk)
     }
 

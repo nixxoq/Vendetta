@@ -256,6 +256,22 @@ fn format_action_text(action: &tl::enums::MessageAction) -> String {
         tl::enums::MessageAction::ChannelMigrateFrom(c) => {
             format!("Supergroup migrated from basic chat {}", c.chat_id)
         }
+        tl::enums::MessageAction::TopicCreate(c) => format!("Created topic \"{}\"", c.title),
+        tl::enums::MessageAction::TopicEdit(e) => {
+            if let Some(ref title) = e.title {
+                format!("Renamed topic to \"{title}\"")
+            } else if e.closed == Some(true) {
+                "Closed topic".to_string()
+            } else if e.closed == Some(false) {
+                "Reopened topic".to_string()
+            } else if e.hidden == Some(true) {
+                "Hidden topic".to_string()
+            } else if e.hidden == Some(false) {
+                "Unhidden topic".to_string()
+            } else {
+                "Edited topic".to_string()
+            }
+        }
         tl::enums::MessageAction::Empty => "Service notification".to_string(),
         _ => "Service action".to_string(),
     }

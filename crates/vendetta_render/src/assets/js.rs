@@ -154,9 +154,28 @@ pub const APP_JS: &str = r#"(function() {
     });
   }
 
+  function initDropdowns() {
+    document.addEventListener('click', (e) => {
+      const openDropdowns = document.querySelectorAll('details.header-menu-dropdown[open], details.date-nav-dropdown[open]');
+      openDropdowns.forEach((dd) => {
+        if (!dd.contains(e.target)) {
+          dd.removeAttribute('open');
+        }
+      });
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const openDropdowns = document.querySelectorAll('details.header-menu-dropdown[open], details.date-nav-dropdown[open]');
+        openDropdowns.forEach((dd) => dd.removeAttribute('open'));
+      }
+    });
+  }
+
   window.addEventListener('hashchange', highlightAnchor);
   window.addEventListener('DOMContentLoaded', () => {
     initTheme();
+    initDropdowns();
     initSpoilers();
     initBlockquotes();
     highlightAnchor();

@@ -21,11 +21,12 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct GroupingContext {
+pub struct GroupingContext<'a> {
     pub is_first_in_group: bool,
     pub is_last_in_group: bool,
     pub show_sender: bool,
     pub show_avatar: bool,
+    pub topic_tag: Option<&'a str>,
 }
 
 pub fn render_chat_item(
@@ -51,7 +52,7 @@ pub fn render_message_bubble(
     available_avatars: &HashSet<PeerId>,
 ) -> String {
     if msg.is_service {
-        return render_service_message(msg);
+        return render_service_message(msg, ctx.topic_tag.is_some());
     }
 
     match mode {
@@ -83,7 +84,11 @@ fn render_telegram_like(
     ctx: &GroupingContext,
     available_avatars: &HashSet<PeerId>,
 ) -> String {
-    let anchor = ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id);
+    let anchor = if ctx.topic_tag.is_some() {
+        ArchiveUrlBuilder::unified_message_anchor(msg.key.peer_id, msg.key.message_id)
+    } else {
+        ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id)
+    };
     let mut classes = vec!["message-row"];
     if msg.is_outgoing {
         classes.push("msg-outgoing");
@@ -142,11 +147,21 @@ fn render_telegram_like(
         && !msg.is_channel_post
         && let Some(name) = &msg.sender_name
     {
-        let _ = writeln!(
-            html,
-            "    <div class=\"message-sender\">{}</div>",
-            html_escape(name)
-        );
+        if let Some(topic_tag) = ctx.topic_tag {
+            let _ = writeln!(
+                html,
+                "    <div class=\"message-sender\">{} {topic_tag}</div>",
+                html_escape(name)
+            );
+        } else {
+            let _ = writeln!(
+                html,
+                "    <div class=\"message-sender\">{}</div>",
+                html_escape(name)
+            );
+        }
+    } else if let Some(topic_tag) = ctx.topic_tag {
+        let _ = writeln!(html, "    <div class=\"message-sender\">{topic_tag}</div>");
     }
 
     if let Some(fwd) = &msg.forward_info {
@@ -257,8 +272,14 @@ fn render_album_telegram_like(
         return String::new();
     };
 
-    let primary_anchor =
-        ArchiveUrlBuilder::message_anchor(primary_msg.key.peer_id, primary_msg.key.message_id);
+    let primary_anchor = if ctx.topic_tag.is_some() {
+        ArchiveUrlBuilder::unified_message_anchor(
+            primary_msg.key.peer_id,
+            primary_msg.key.message_id,
+        )
+    } else {
+        ArchiveUrlBuilder::message_anchor(primary_msg.key.peer_id, primary_msg.key.message_id)
+    };
     let mut classes = vec!["message-row", "album-row"];
     if primary_msg.is_outgoing {
         classes.push("msg-outgoing");
@@ -313,11 +334,21 @@ fn render_album_telegram_like(
         && !primary_msg.is_channel_post
         && let Some(name) = &primary_msg.sender_name
     {
-        let _ = writeln!(
-            html,
-            "    <div class=\"message-sender\">{}</div>",
-            html_escape(name)
-        );
+        if let Some(topic_tag) = ctx.topic_tag {
+            let _ = writeln!(
+                html,
+                "    <div class=\"message-sender\">{} {topic_tag}</div>",
+                html_escape(name)
+            );
+        } else {
+            let _ = writeln!(
+                html,
+                "    <div class=\"message-sender\">{}</div>",
+                html_escape(name)
+            );
+        }
+    } else if let Some(topic_tag) = ctx.topic_tag {
+        let _ = writeln!(html, "    <div class=\"message-sender\">{topic_tag}</div>");
     }
 
     for msg in &album.messages {

@@ -6,7 +6,11 @@ use vendetta_render::{
 };
 use vendetta_storage::ArchiveDb;
 
-pub fn run_export_html(archive_db_path: &Path, options: ExportOptions) -> Result<ExportSummary> {
+pub fn run_export_html(
+    archive_db_path: &Path,
+    options: ExportOptions,
+    disable_forum_render: bool,
+) -> Result<ExportSummary> {
     info!(
         "Opening SQLite archive database at {}",
         archive_db_path.display()
@@ -20,7 +24,8 @@ pub fn run_export_html(archive_db_path: &Path, options: ExportOptions) -> Result
         options.output_dir.display()
     );
 
-    let exporter = HtmlArchiveExporter::new(&db, options);
+    let exporter = HtmlArchiveExporter::new(&db, options)
+        .with_disable_forum_render(disable_forum_render);
     let summary = exporter
         .export_with_progress(|stage, current, total| {
             if total > 0 && current > 0 {

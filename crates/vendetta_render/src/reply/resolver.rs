@@ -8,7 +8,7 @@ use crate::{entity::html_escape, model::RenderReplyPreview, url_builder::Archive
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplyLocationMap {
-    locations: HashMap<MessageKey, usize>,
+    locations: HashMap<MessageKey, (usize, Option<i32>)>,
 }
 
 impl ReplyLocationMap {
@@ -18,12 +18,16 @@ impl ReplyLocationMap {
         }
     }
 
-    pub fn insert(&mut self, key: MessageKey, page_index: usize) {
-        self.locations.insert(key, page_index);
+    pub fn insert(&mut self, key: MessageKey, page_index: usize, topic_id: Option<i32>) {
+        self.locations.insert(key, (page_index, topic_id));
+    }
+
+    pub fn get_location(&self, key: &MessageKey) -> Option<(usize, Option<i32>)> {
+        self.locations.get(key).copied()
     }
 
     pub fn get_page(&self, key: &MessageKey) -> Option<usize> {
-        self.locations.get(key).copied()
+        self.locations.get(key).map(|(p, _)| *p)
     }
 }
 
@@ -125,8 +129,38 @@ impl<'a> ReplyResolver<'a> {
                     .first()
                     .map(|m| media_kind_indicator(m.kind).to_string());
 
+                let service_desc = if let Some(ref raw) = target.raw_tl {
+                    if let Ok(grammers_tl_types::enums::Message::Service(s)) =
+                        grammers_tl_types::enums::Message::from_bytes(raw)
+                    {
+                        match &s.action {
+                            grammers_tl_types::enums::MessageAction::TopicCreate(t) => {
+                                Some(format!("Created topic \"{}\"", t.title))
+                            }
+                            grammers_tl_types::enums::MessageAction::TopicEdit(t) => {
+                                if let Some(title) = &t.title {
+                                    Some(format!("Renamed topic to \"{title}\""))
+                                } else if t.closed == Some(true) {
+                                    Some("Closed topic".to_string())
+                                } else if t.closed == Some(false) {
+                                    Some("Reopened topic".to_string())
+                                } else {
+                                    Some("Edited topic".to_string())
+                                }
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 let snippet = if target.state == MessageState::Deleted {
                     Some("[Deleted message]".to_string())
+                } else if let Some(desc) = service_desc {
+                    Some(desc)
                 } else if let Some(t) = &target.text
                     && !t.trim().is_empty()
                 {
@@ -155,15 +189,35 @@ impl<'a> ReplyResolver<'a> {
                 )
             };
 
-        let target_url = self.location_map.get_page(&target_key).map(|page_idx| {
-            ArchiveUrlBuilder::message_full_link(
-                Some(source_peer),
-                2,
-                target_key.peer_id,
-                page_idx,
-                target_key.message_id,
-            )
-        });
+        let target_url =
+            self.location_map
+                .get_location(&target_key)
+                .map(|(page_idx, target_topic_id)| {
+                    let anchor = ArchiveUrlBuilder::message_anchor(
+                        target_key.peer_id,
+                        target_key.message_id,
+                    );
+                    if target_key.peer_id == source_peer {
+                        let chunk_file = if let Some(tid) = target_topic_id {
+                            ArchiveUrlBuilder::topic_page_file_name(tid, page_idx)
+                        } else {
+                            ArchiveUrlBuilder::page_file_name(page_idx)
+                        };
+                        format!("{chunk_file}#{anchor}")
+                    } else {
+                        let target_chunk = if let Some(tid) = target_topic_id {
+                            ArchiveUrlBuilder::topic_chunk_file_rel(
+                                target_key.peer_id,
+                                tid,
+                                page_idx,
+                            )
+                        } else {
+                            ArchiveUrlBuilder::chunk_file_rel(target_key.peer_id, page_idx)
+                        };
+                        let rel = ArchiveUrlBuilder::relative_url(2, &target_chunk);
+                        format!("{rel}#{anchor}")
+                    }
+                });
 
         RenderReplyPreview {
             target_key,

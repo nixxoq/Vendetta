@@ -30,7 +30,12 @@ pub fn render_global_index(
 
     let mut dialogs_html = String::with_capacity(peers.len() * 256);
     for peer in peers {
-        let chat_url = ArchiveUrlBuilder::chat_root_url(0, peer.peer_id);
+        let default_tid = if peer.is_forum {
+            peer.topics.first().map(|t| t.topic_id)
+        } else {
+            None
+        };
+        let chat_url = ArchiveUrlBuilder::topic_chat_root_url(0, peer.peer_id, default_tid);
         let avatar_html = render_avatar_markup(
             Some(peer.peer_id),
             &peer.name,

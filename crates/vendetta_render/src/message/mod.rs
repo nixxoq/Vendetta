@@ -85,10 +85,10 @@ fn is_same_cluster(a: &RenderMessage, b: &RenderMessage) -> bool {
         && (a.date - b.date).abs() <= GROUP_TIME_WINDOW_SECS
 }
 
-pub fn compute_item_grouping_contexts(
-    items: &[RenderItem],
+pub fn compute_item_grouping_contexts<'a>(
+    items: &'a [RenderItem],
     is_group_chat: bool,
-) -> Vec<GroupingContext> {
+) -> Vec<GroupingContext<'a>> {
     if items.is_empty() {
         return Vec::new();
     }
@@ -123,16 +123,17 @@ pub fn compute_item_grouping_contexts(
             is_last_in_group: is_last,
             show_sender: is_first && is_group_chat && !current_msg.is_outgoing && !is_channel,
             show_avatar: is_first && is_group_chat && !current_msg.is_outgoing && !is_channel,
+            topic_tag: None,
         });
     }
 
     contexts
 }
 
-pub fn compute_grouping_contexts(
+pub fn compute_grouping_contexts<'a>(
     messages: &[RenderMessage],
     is_group_chat: bool,
-) -> Vec<GroupingContext> {
+) -> Vec<GroupingContext<'a>> {
     if messages.is_empty() {
         return Vec::new();
     }
@@ -159,6 +160,7 @@ pub fn compute_grouping_contexts(
             is_last_in_group: is_last,
             show_sender: is_first && is_group_chat && !current.is_outgoing && !is_channel,
             show_avatar: is_first && is_group_chat && !current.is_outgoing && !is_channel,
+            topic_tag: None,
         });
     }
 

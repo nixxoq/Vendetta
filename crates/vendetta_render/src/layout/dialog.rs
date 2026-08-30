@@ -6,13 +6,15 @@ use crate::{
     assets::SYMBOLS_SVG,
     entity::html_escape,
     message::{bubble::render_chat_item, compute_item_grouping_contexts, edits::days_to_ymd},
-    model::{PresentationMode, RenderItem, RenderPeer, ThemeMode},
+    model::{PresentationMode, RenderItem, RenderPeer, RenderTopic, ThemeMode},
     url_builder::{ArchiveUrlBuilder, render_avatar_markup},
 };
 
 pub struct DialogPageContext<'a> {
     pub current_peer: &'a RenderPeer,
     pub all_peers: &'a [RenderPeer],
+    pub current_topic: Option<&'a RenderTopic>,
+    pub topics: &'a [RenderTopic],
     pub items: &'a [RenderItem],
     pub page_index: usize,
     pub total_pages: usize,
@@ -20,6 +22,125 @@ pub struct DialogPageContext<'a> {
     pub theme: ThemeMode,
     pub date_nav_html: Option<&'a str>,
     pub available_avatars: &'a HashSet<PeerId>,
+    pub is_unified_messages_view: bool,
+    pub item_topic_ids: Option<&'a [i32]>,
+}
+
+fn render_topics_sidebar(topics: &[RenderTopic], current_topic: Option<&RenderTopic>) -> String {
+    let mut topic_items_html = String::with_capacity(topics.len() * 256);
+
+    for topic in topics {
+        let topic_url = ArchiveUrlBuilder::topic_page_file_name(topic.topic_id, 0);
+        let is_active = current_topic.is_some_and(|t| t.topic_id == topic.topic_id);
+        let active_cls = if is_active { " active" } else { "" };
+
+        let icon_html = if let Some(ref asset_rel) = topic.icon_asset {
+            format!(
+                "<img src=\"{}\" alt=\"{}\" class=\"topic-icon-img\" loading=\"lazy\">",
+                html_escape(asset_rel),
+                html_escape(&topic.title),
+            )
+        } else if let Some(color) = topic.icon_color {
+            let hex_color = format!("#{:06x}", color & 0xFFFFFF);
+            format!("<span class=\"topic-icon\" style=\"color: {hex_color};\">#</span>")
+        } else {
+            "<span class=\"topic-icon\">#</span>".to_string()
+        };
+
+        let _ = write!(
+            topic_items_html,
+            r#"<li class="topic-item{active_cls}">
+  <a href="{topic_url}" class="topic-link">
+    {icon_html}
+    <span class="topic-title">{}</span>
+    <span class="topic-count">{}</span>
+  </a>
+</li>
+"#,
+            html_escape(&topic.title),
+            topic.total_messages
+        );
+    }
+
+    format!(
+        r##"<aside class="topics-sidebar">
+  <div class="topics-header">
+    <span class="topics-heading">Topics</span>
+  </div>
+  <ul class="topics-list">
+    {topic_items_html}
+  </ul>
+</aside>
+"##
+    )
+}
+
+fn render_topic_tag(item: &RenderItem, meta: &RenderTopic) -> String {
+    let icon_html = if let Some(ref asset_rel) = meta.icon_asset {
+        format!(
+            "<img src=\"{}\" alt=\"{}\" class=\"msg-topic-tag-img\" loading=\"lazy\">",
+            html_escape(asset_rel),
+            html_escape(&meta.title)
+        )
+    } else if let Some(color) = meta.icon_color {
+        let hex = format!("#{:06x}", color & 0xFFFFFF);
+        format!("<span style=\"color: {hex}; font-weight: bold;\">#</span>")
+    } else {
+        "<span style=\"font-weight: bold;\">#</span>".to_string()
+    };
+
+    let page_file = ArchiveUrlBuilder::topic_page_file_name(meta.topic_id, 0);
+    let msg_anchor = match item {
+        RenderItem::Message(m) => {
+            ArchiveUrlBuilder::message_anchor(m.key.peer_id, m.key.message_id)
+        }
+        RenderItem::Album(a) => a
+            .messages
+            .first()
+            .map(|m| ArchiveUrlBuilder::message_anchor(m.key.peer_id, m.key.message_id))
+            .unwrap_or_default(),
+    };
+
+    format!(
+        r#"<a href="{page_file}#{msg_anchor}" class="msg-topic-tag" title="Topic: {}">{icon_html} <span>{}</span></a>"#,
+        html_escape(&meta.title),
+        html_escape(&meta.title)
+    )
+}
+
+fn render_forum_actions_menu(topics: &[RenderTopic], is_unified_messages_view: bool) -> String {
+    if is_unified_messages_view {
+        let default_tid = topics.first().map(|t| t.topic_id).unwrap_or(1);
+        let topic_url = ArchiveUrlBuilder::topic_page_file_name(default_tid, 0);
+        format!(
+            r##"<details class="header-menu-dropdown forum-menu-dropdown">
+  <summary class="btn-icon" title="Chat Actions" aria-label="Chat Actions">
+    <svg class="icon"><use href="#icon-more-vertical"></use></svg>
+  </summary>
+  <div class="header-menu-popover">
+    <a href="{topic_url}" class="header-menu-item">
+      <svg class="icon"><use href="#icon-topics"></use></svg>
+      <span>View as topics</span>
+    </a>
+  </div>
+</details>"##
+        )
+    } else {
+        let messages_url = ArchiveUrlBuilder::unified_messages_page_file_name(0);
+        format!(
+            r##"<details class="header-menu-dropdown forum-menu-dropdown">
+  <summary class="btn-icon" title="Chat Actions" aria-label="Chat Actions">
+    <svg class="icon"><use href="#icon-more-vertical"></use></svg>
+  </summary>
+  <div class="header-menu-popover">
+    <a href="{messages_url}" class="header-menu-item">
+      <svg class="icon"><use href="#icon-messages"></use></svg>
+      <span>View as messages</span>
+    </a>
+  </div>
+</details>"##
+        )
+    }
 }
 
 pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
@@ -39,7 +160,12 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
 
     let mut dialogs_html = String::with_capacity(ctx.all_peers.len() * 256);
     for peer in ctx.all_peers {
-        let chat_url = ArchiveUrlBuilder::chat_root_url(2, peer.peer_id);
+        let default_tid = if peer.is_forum {
+            peer.topics.first().map(|t| t.topic_id)
+        } else {
+            None
+        };
+        let chat_url = ArchiveUrlBuilder::topic_chat_root_url(2, peer.peer_id, default_tid);
         let avatar_html = render_avatar_markup(
             Some(peer.peer_id),
             &peer.name,
@@ -73,6 +199,12 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         );
     }
 
+    let topics_sidebar_html = if !ctx.is_unified_messages_view && !ctx.topics.is_empty() {
+        render_topics_sidebar(ctx.topics, ctx.current_topic)
+    } else {
+        String::new()
+    };
+
     let mut messages_html = String::with_capacity(ctx.items.len() * 512);
     let mut last_date_day = None;
 
@@ -93,7 +225,22 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
             last_date_day = Some(days);
         }
 
-        let g_ctx = grouping_ctxs.get(idx).copied().unwrap_or_default();
+        let mut g_ctx = grouping_ctxs.get(idx).copied().unwrap_or_default();
+        let topic_tag_buf = if ctx.is_unified_messages_view && !ctx.topics.is_empty() {
+            let item_top_id = ctx
+                .item_topic_ids
+                .and_then(|ids| ids.get(idx))
+                .copied()
+                .unwrap_or(1);
+            ctx.topics
+                .iter()
+                .find(|t| t.topic_id == item_top_id)
+                .map(|meta| render_topic_tag(item, meta))
+        } else {
+            None
+        };
+        g_ctx.topic_tag = topic_tag_buf.as_deref();
+
         messages_html.push_str(&render_chat_item(
             item,
             &g_ctx,
@@ -105,14 +252,26 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
     }
 
     let prev_link = if ctx.page_index > 0 {
-        let prev_file = ArchiveUrlBuilder::page_file_name(ctx.page_index - 1);
+        let prev_file = if ctx.is_unified_messages_view {
+            ArchiveUrlBuilder::unified_messages_page_file_name(ctx.page_index - 1)
+        } else if let Some(top) = ctx.current_topic {
+            ArchiveUrlBuilder::topic_page_file_name(top.topic_id, ctx.page_index - 1)
+        } else {
+            ArchiveUrlBuilder::page_file_name(ctx.page_index - 1)
+        };
         format!("<a href=\"{prev_file}\" class=\"btn-nav\">← Previous Page</a>")
     } else {
         "<span class=\"btn-nav disabled\">← Previous Page</span>".to_string()
     };
 
     let next_link = if ctx.page_index + 1 < ctx.total_pages {
-        let next_file = ArchiveUrlBuilder::page_file_name(ctx.page_index + 1);
+        let next_file = if ctx.is_unified_messages_view {
+            ArchiveUrlBuilder::unified_messages_page_file_name(ctx.page_index + 1)
+        } else if let Some(top) = ctx.current_topic {
+            ArchiveUrlBuilder::topic_page_file_name(top.topic_id, ctx.page_index + 1)
+        } else {
+            ArchiveUrlBuilder::page_file_name(ctx.page_index + 1)
+        };
         format!("<a href=\"{next_file}\" class=\"btn-nav\">Next Page →</a>")
     } else {
         "<span class=\"btn-nav disabled\">Next Page →</span>".to_string()
@@ -122,7 +281,19 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
     let total_pages_display = ctx.total_pages.max(1);
     let escaped_name = html_escape(&ctx.current_peer.name);
 
-    let subtitle = if let Some(un) = &ctx.current_peer.username {
+    let display_title = if ctx.is_unified_messages_view {
+        escaped_name.clone()
+    } else if let Some(top) = ctx.current_topic {
+        format!("{escaped_name} › {}", html_escape(&top.title))
+    } else {
+        escaped_name.clone()
+    };
+
+    let subtitle = if ctx.is_unified_messages_view {
+        format!("{} messages", ctx.current_peer.total_messages)
+    } else if let Some(top) = ctx.current_topic {
+        format!("{} messages", top.total_messages)
+    } else if let Some(un) = &ctx.current_peer.username {
         format!(
             "@{} &bull; {} messages",
             html_escape(un),
@@ -151,6 +322,13 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
     };
 
     let date_menu = ctx.date_nav_html.unwrap_or_default();
+
+    let forum_menu_html = if ctx.current_peer.is_forum && !ctx.topics.is_empty() {
+        render_forum_actions_menu(ctx.topics, ctx.is_unified_messages_view)
+    } else {
+        String::new()
+    };
+
     let header_avatar = render_avatar_markup(
         Some(ctx.current_peer.peer_id),
         &ctx.current_peer.name,
@@ -167,6 +345,12 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         "avatar",
         ctx.available_avatars,
     );
+
+    let has_topics_cls = if !ctx.is_unified_messages_view && !ctx.topics.is_empty() {
+        " has-topics"
+    } else {
+        ""
+    };
 
     format!(
         r##"<!DOCTYPE html>
@@ -201,7 +385,7 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
   <div style="display: none;">
     {SYMBOLS_SVG}
   </div>
-  <div class="app-container">
+  <div class="app-container{has_topics_cls}">
     <aside class="sidebar">
       <div class="sidebar-header">
         <a href="../../index.html" class="sidebar-title" style="color: inherit;">← All Chats</a>
@@ -218,18 +402,20 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         {dialogs_html}
       </ul>
     </aside>
+    {topics_sidebar_html}
 
     <main class="chat-pane">
       <header class="chat-header">
         <div class="chat-title-info" title="Click to view chat info" style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer;">
           {header_avatar}
           <div>
-            <h2>{escaped_name}</h2>
+            <h2>{display_title}</h2>
             <div class="chat-subtitle">{subtitle}</div>
           </div>
         </div>
         <div class="chat-header-actions">
           {date_menu}
+          {forum_menu_html}
         </div>
       </header>
 

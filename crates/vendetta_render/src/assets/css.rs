@@ -271,6 +271,208 @@ a:hover {
   text-overflow: ellipsis;
 }
 
+/* Topics */
+.topics-sidebar {
+  width: 260px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.topics-header {
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.topics-heading {
+  font-weight: 700;
+  font-size: 0.9375rem;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.topics-list {
+  flex: 1;
+  overflow-y: auto;
+  list-style: none;
+  padding: 0.5rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.topic-item {
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
+}
+
+.topic-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 6px;
+  min-height: 38px;
+  box-sizing: border-box;
+}
+
+.topic-item:hover {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="dark"] .topic-item:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.topic-item.active {
+  background-color: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.topic-icon {
+  font-size: 0.9375rem;
+  font-weight: 800;
+  color: var(--accent-color);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 4px;
+  background: var(--bg-system-event);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.topic-icon-img {
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 4px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.topic-title {
+  font-weight: 500;
+  font-size: 0.875rem;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+
+.topic-count {
+  font-size: 0.75rem;
+  background: var(--bg-system-event);
+  border: 1px solid transparent;
+  padding: 0.125rem 0.375rem;
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.topic-item.active .topic-count {
+  background: var(--accent-color);
+  color: #fff;
+}
+
+/* 3-Dot Menu dropdown */
+.header-menu-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.header-menu-dropdown summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-menu-dropdown summary::-webkit-details-marker {
+  display: none;
+}
+
+.header-menu-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 180px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  padding: 0.375rem;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.header-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.header-menu-item:hover {
+  background-color: var(--bg-hover);
+}
+
+.header-menu-item .icon {
+  width: 1.125rem;
+  height: 1.125rem;
+  color: var(--text-secondary);
+}
+
+/* View as messages (for topics) */
+.msg-topic-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+  margin-left: 0.375rem;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 4px;
+  background: var(--bg-system-event);
+  vertical-align: middle;
+}
+
+.msg-topic-tag:hover {
+  opacity: 0.85;
+  text-decoration: underline;
+}
+
+.msg-topic-tag-img {
+  width: 0.875rem;
+  height: 0.875rem;
+  object-fit: contain;
+  vertical-align: middle;
+}
+
 /* Chat Pane */
 .chat-pane {
   flex: 1;
@@ -742,6 +944,13 @@ a:hover {
   .sidebar {
     width: 100%;
     height: 240px;
+  }
+  .topics-sidebar {
+    width: 100%;
+    height: auto;
+    max-height: 180px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
   }
   .chat-messages {
     padding: 1rem;

@@ -3,6 +3,7 @@ pub mod message;
 pub mod peer;
 pub mod reply;
 pub mod sync;
+pub mod topics;
 
 pub use media::{
     FileRangeHash, FilterDecision, FilterReason, MediaDownloadStatus, MediaFilterPolicy, MediaKind,
@@ -20,3 +21,4 @@ pub use sync::{
     DialogFilterRecord, DialogInfo, NormalizedUpdate, PeerSyncState, SyncBaseline,
     SyncBaselineStatus, SyncIntegrityReport, SyncStateRecord, UnsupportedEventRecord,
 };
+pub use topics::{TopicAction, TopicId, TopicInfo};

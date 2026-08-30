@@ -248,6 +248,10 @@ pub enum Commands {
         /// Build date jump navigator index.
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         build_date_index: bool,
+
+        /// Disable forum and topic-aware rendering, exporting forum supergroups as a flat chronological message stream.
+        #[arg(long, default_value_t = false)]
+        disable_forum_render: bool,
     },
 
     /// Verify integrity of a generated static HTML export.
@@ -707,6 +711,7 @@ async fn run(cli: Cli) -> Result<i32> {
             include_edit_history,
             build_search_index,
             build_date_index,
+            disable_forum_render,
         } => {
             let media_src = media_dir
                 .unwrap_or_else(|| archive.parent().unwrap_or(Path::new(".")).to_path_buf());
@@ -727,7 +732,7 @@ async fn run(cli: Cli) -> Result<i32> {
                 target_peers: None,
             };
 
-            let summary = render::run_export_html(&archive, options)?;
+            let summary = render::run_export_html(&archive, options, disable_forum_render)?;
             if json {
                 let out = serde_json::json!({
                     "schema_version": 1,
