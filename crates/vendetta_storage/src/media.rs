@@ -194,6 +194,7 @@ impl ArchiveDb {
                     OR (download_status = 'retry_wait' AND (next_retry_at IS NULL OR next_retry_at <= ?1))
                  ORDER BY
                     CASE WHEN download_status = 'pending' THEN 0 ELSE 1 END ASC,
+                    retry_count ASC,
                     created_at ASC
                  LIMIT 1",
             )?;

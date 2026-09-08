@@ -177,6 +177,18 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         reactions_only: bool,
 
+        /// Download ONLY photos, skipping videos, documents, audio, and animations.
+        #[arg(long, default_value_t = false)]
+        photos_only: bool,
+
+        /// Skip downloading videos and video notes.
+        #[arg(long, default_value_t = false)]
+        skip_videos: bool,
+
+        /// Maximum media file size in megabytes to download (e.g. 20 for 20MB).
+        #[arg(long)]
+        max_size_mb: Option<i64>,
+
         /// Minimum worker concurrency.
         #[arg(long, default_value_t = 1)]
         min_workers: usize,
@@ -659,6 +671,9 @@ async fn run(cli: Cli) -> Result<i32> {
             max_workers,
             max_dc_workers,
             initial_workers,
+            photos_only,
+            skip_videos,
+            max_size_mb,
         } => {
             let eff_archive = config.resolve_archive_path(archive, account);
             let eff_media_dir = config.resolve_media_dir(media_dir, &eff_archive);
@@ -672,6 +687,17 @@ async fn run(cli: Cli) -> Result<i32> {
                 initial_workers,
             };
 
+            let policy = MediaFilterPolicy {
+                allow_videos: !photos_only && !skip_videos,
+                allow_video_notes: !photos_only && !skip_videos,
+                allow_documents: !photos_only,
+                allow_audio: !photos_only,
+                allow_voice: !photos_only,
+                allow_animations: !photos_only,
+                max_size_bytes: max_size_mb.map(|mb| mb * 1024 * 1024),
+                ..MediaFilterPolicy::default()
+            };
+
             let summary = media::run_download_media(
                 eff_api_id,
                 eff_api_hash,
@@ -682,6 +708,7 @@ async fn run(cli: Cli) -> Result<i32> {
                 backfill,
                 avatars_only,
                 reactions_only,
+                policy,
                 quiet,
                 json,
             )

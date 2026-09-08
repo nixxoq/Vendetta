@@ -304,13 +304,22 @@ impl MediaScheduler {
                                     RetryAction::RetryAfterDelay { seconds } => {
                                         ctrl.record_backoff();
                                         ctrl.set_dc_cooldown(record.dc_id, seconds);
+                                        let (status, next_retry) = if record.retry_count >= record.max_retries {
+                                            (MediaDownloadStatus::PermanentlyFailed, None)
+                                        } else {
+                                            let backoff = (record.retry_count as i64 + 1).min(5);
+                                            (
+                                                MediaDownloadStatus::RetryWait,
+                                                Some(now_unix_secs() + (seconds as i64) * backoff),
+                                            )
+                                        };
                                         let _ = db_ref.update_media_status(
                                             &record.media_id,
-                                            MediaDownloadStatus::RetryWait,
+                                            status,
                                             Some(&err.to_string()),
-                                            Some(now_unix_secs() + seconds as i64),
+                                            next_retry,
                                         );
-                                        return (false, Some(MediaDownloadStatus::RetryWait), 0);
+                                        return (false, Some(status), 0);
                                     }
                                     RetryAction::RetryImmediately => {
                                         if attempts <= MAX_IMMEDIATE_ATTEMPTS {

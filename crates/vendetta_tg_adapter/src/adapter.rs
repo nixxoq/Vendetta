@@ -159,14 +159,20 @@ impl GrammersTelegramAdapter {
         peer_type_hint: Option<PeerType>,
     ) -> AdapterResult<PeerType> {
         if let Some(pt) = peer_type_hint {
+            self.peer_types.write().unwrap().insert(peer_id, pt);
             return Ok(pt);
         }
-        self.peer_types
-            .read()
-            .unwrap()
-            .get(&peer_id)
-            .copied()
-            .ok_or(AdapterError::UnknownPeerType(peer_id))
+        if let Some(pt) = self.peer_types.read().unwrap().get(&peer_id).copied() {
+            return Ok(pt);
+        }
+        let deduced = match peer_id.raw() {
+            r if r > 0 => PeerType::User,
+            r if r <= -1_000_000_000_000 => PeerType::Channel,
+            r if r < 0 => PeerType::Group,
+            _ => return Err(AdapterError::UnknownPeerType(peer_id)),
+        };
+        self.peer_types.write().unwrap().insert(peer_id, deduced);
+        Ok(deduced)
     }
 
     pub fn decode_user_id(peer_id: PeerId) -> i64 {

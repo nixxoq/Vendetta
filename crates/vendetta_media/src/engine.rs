@@ -150,4 +150,25 @@ impl MediaEngine {
 
         Ok(newly_allowed)
     }
+
+    pub fn apply_filter_policy(&self, policy: &MediaFilterPolicy) -> MediaEngineResult<()> {
+        self.requeue_skipped(policy)?;
+        self.db
+            .list_media_by_status(MediaDownloadStatus::Pending, 1_000_000)?
+            .into_iter()
+            .filter_map(|record| match MediaPolicyEvaluator::evaluate(policy, &record, None) {
+                (decision @ FilterDecision::Skip, reason) => Some((record, decision, reason)),
+                _ => None,
+            })
+            .try_for_each(|(record, decision, reason)| {
+                self.db.update_media_filter_status(
+                    &record.media_id,
+                    MediaDownloadStatus::Skipped,
+                    decision,
+                    reason,
+                    policy.policy_version,
+                )
+            })?;
+        Ok(())
+    }
 }

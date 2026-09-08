@@ -54,9 +54,16 @@ impl FileReferenceRefresher {
         );
 
         for (peer_id, message_id) in refs {
+            let peer_type_hint = self
+                .db
+                .get_peer(peer_id)
+                .ok()
+                .flatten()
+                .map(|p| p.peer_type);
+
             let fetched_msgs = match self
                 .adapter
-                .get_messages(peer_id, None, &[message_id])
+                .get_messages(peer_id, peer_type_hint, &[message_id])
                 .await
             {
                 Ok(m) => m,
