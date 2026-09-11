@@ -57,10 +57,12 @@ where
     let mut author_signature = None;
     let mut comments_count = None;
     let mut has_comments = false;
+    let mut is_outgoing = false;
 
     if let Some(ref raw) = msg.raw_tl {
         if let Ok(tl::enums::Message::Service(s)) = tl::enums::Message::from_bytes(raw) {
             is_service = true;
+            is_outgoing = s.out;
             let formatted = format_service_action(&s.action);
             if formatted != "Service event" {
                 service_description = Some(formatted);
@@ -73,6 +75,7 @@ where
                 service_description = Some(formatted);
             }
         } else if let Ok(tl::enums::Message::Message(m)) = tl::enums::Message::from_bytes(raw) {
+            is_outgoing = m.out;
             author_signature = m.post_author;
             if let Some(tl::enums::MessageReplies::Replies(r)) = m.replies {
                 has_comments = r.comments;
@@ -217,7 +220,7 @@ where
         date: msg.date,
         sender_id: msg.sender_id,
         sender_name,
-        is_outgoing: false,
+        is_outgoing,
         state: msg.state,
         formatted_html,
         raw_text: msg.text.clone(),

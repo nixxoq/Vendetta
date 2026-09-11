@@ -111,6 +111,7 @@ pub async fn run_download_media_with_adapter(
     backfill: bool,
     avatars_only: bool,
     reactions_only: bool,
+    policy: MediaFilterPolicy,
     mut progress: CliProgress,
     json: bool,
 ) -> Result<SchedulerSummary> {
@@ -237,9 +238,10 @@ pub async fn run_download_media_with_adapter(
         reaction_summary.failed
     );
 
-    if backfill {
+    let media_stats = db.get_media_stats()?;
+    if backfill || media_stats.total_count == 0 {
         progress.stage("Backfilling media objects from archived messages");
-        let backfill_res = run_backfill_media(Arc::clone(&db), &MediaFilterPolicy::default())?;
+        let backfill_res = run_backfill_media(Arc::clone(&db), &policy)?;
         progress.update(format!(
             "Backfill: {} messages scanned, {} media discovered ({} eligible, {} skipped)",
             backfill_res.messages_scanned,
@@ -259,6 +261,7 @@ pub async fn run_download_media_with_adapter(
         concurrency.max_dc_workers,
         concurrency.initial_workers,
     );
+    let _ = engine.apply_filter_policy(&policy);
 
     progress.stage("Running startup reconciliation across filesystem and SQLite state");
     let rec = engine.reconcile_startup()?;
@@ -320,6 +323,7 @@ pub async fn run_download_media(
     backfill: bool,
     avatars_only: bool,
     reactions_only: bool,
+    policy: MediaFilterPolicy,
     quiet: bool,
     json: bool,
 ) -> Result<SchedulerSummary> {
@@ -335,6 +339,7 @@ pub async fn run_download_media(
         backfill,
         avatars_only,
         reactions_only,
+        policy,
         progress,
         json,
     )
