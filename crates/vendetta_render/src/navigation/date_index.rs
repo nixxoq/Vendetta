@@ -15,7 +15,7 @@ pub struct DateJumpEntry {
 
 #[derive(Debug, Clone, Default)]
 pub struct DateNavigator {
-    entries: BTreeMap<(i32, u32), BTreeMap<u32, usize>>,
+    entries: BTreeMap<(i32, u32), BTreeMap<u32, String>>,
 }
 
 impl DateNavigator {
@@ -26,18 +26,27 @@ impl DateNavigator {
     }
 
     pub fn record_message_date(&mut self, timestamp: i64, page_index: usize) {
+        let page_file = ArchiveUrlBuilder::page_file_name(page_index);
+        self.record_message_target(timestamp, page_file);
+    }
+
+    pub fn record_message_target(&mut self, timestamp: i64, target_page_file: String) {
         let days = timestamp / 86400;
         let (year, month, day) = days_to_ymd(days);
         let month_map = self.entries.entry((year, month)).or_default();
-        month_map.entry(day).or_insert(page_index);
+        month_map.entry(day).or_insert(target_page_file);
     }
 
     pub fn render_date_jump_menu(
         &self,
         _from_peer: PeerId,
-        topic_id: Option<i32>,
-        is_unified_messages_view: bool,
+        _topic_id: Option<i32>,
+        _is_unified_messages_view: bool,
     ) -> String {
+        self.render_date_jump_menu_for_page(None)
+    }
+
+    pub fn render_date_jump_menu_for_page(&self, from_page_rel: Option<&str>) -> String {
         if self.entries.is_empty() {
             return String::new();
         }
@@ -60,17 +69,15 @@ impl DateNavigator {
                 html,
                 "      <li class=\"date-year-group\">\n        <div class=\"date-month-heading\">{year} {month_name}</div>\n        <div class=\"date-days-grid\">"
             );
-            for (day, page_idx) in days {
-                let page_file = if is_unified_messages_view {
-                    ArchiveUrlBuilder::unified_messages_page_file_name(*page_idx)
-                } else if let Some(tid) = topic_id {
-                    ArchiveUrlBuilder::topic_page_file_name(tid, *page_idx)
+            for (day, page_file) in days {
+                let href = if let Some(from_rel) = from_page_rel {
+                    ArchiveUrlBuilder::relative_day_to_day(from_rel, page_file)
                 } else {
-                    ArchiveUrlBuilder::page_file_name(*page_idx)
+                    page_file.clone()
                 };
                 let _ = write!(
                     html,
-                    "<a href=\"{page_file}#d-{year:04}-{month:02}-{day:02}\" class=\"date-jump-btn\">{day}</a>"
+                    "<a href=\"{href}#d-{year:04}-{month:02}-{day:02}\" class=\"date-jump-btn\">{day}</a>"
                 );
             }
             html.push_str("</div>\n      </li>\n");

@@ -153,3 +153,165 @@ pub fn materialize_dir_contents(
     }
     count
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct ChatMediaManifest {
+    pub media_files: Vec<String>,
+    pub avatar_files: Vec<String>,
+    pub reaction_files: Vec<String>,
+    pub topic_assets: Vec<String>,
+    pub total_copied: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn materialize_chat_scope(
+    db: &ArchiveDb,
+    chat_dir: &Path,
+    peer_id: vendetta_model::PeerId,
+    message_ids: &[vendetta_model::MessageId],
+    media_src_dir: Option<&Path>,
+    media_mode: MediaMode,
+    participants: &HashSet<vendetta_model::PeerId>,
+    reaction_doc_ids: &HashSet<i64>,
+    topic_icon_files: &[String],
+    hasher: &mut Sha256,
+) -> RenderResult<ChatMediaManifest> {
+    crate::assets::write_all_assets(chat_dir)?;
+
+    let media_dir = chat_dir.join("media");
+    let avatars_dir = chat_dir.join("avatars");
+    let reactions_dir = chat_dir.join("reactions");
+    fs::create_dir_all(&media_dir)?;
+    fs::create_dir_all(&avatars_dir)?;
+    fs::create_dir_all(&reactions_dir)?;
+
+    if !topic_icon_files.is_empty() {
+        let topic_assets_dir = chat_dir.join("topics/assets");
+        fs::create_dir_all(&topic_assets_dir)?;
+    }
+
+    let mut manifest = ChatMediaManifest::default();
+    let Some(src_base_dir) = media_src_dir else {
+        return Ok(manifest);
+    };
+
+    let mut processed_media_ids = HashSet::new();
+
+    for mid in message_ids {
+        if let Ok(media_list) = db.get_media_for_message(peer_id, *mid) {
+            for m in media_list {
+                if let Some(rel_path) = &m.local_rel_path {
+                    if !processed_media_ids.insert(m.media_id.clone()) {
+                        continue;
+                    }
+
+                    if let Ok(clean_rel_path) = validate_and_clean_media_rel_path(rel_path) {
+                        let file_rel = clean_rel_path
+                            .strip_prefix("media/")
+                            .unwrap_or(&clean_rel_path);
+                        let dst_file = media_dir.join(file_rel);
+
+                        if !dst_file.starts_with(&media_dir) {
+                            continue;
+                        }
+
+                        let src_candidates = [
+                            src_base_dir.join("media").join(file_rel),
+                            src_base_dir.join(file_rel),
+                            src_base_dir.join(&clean_rel_path),
+                        ];
+
+                        if let Some(src_file) = src_candidates.into_iter().find(|p| p.is_file()) {
+                            if let Some(parent) = dst_file.parent() {
+                                let _ = fs::create_dir_all(parent);
+                            }
+                            if materialize_file(&src_file, &dst_file, media_mode).is_ok() {
+                                hasher.update(m.media_id.as_bytes());
+                                if let Some(ref sh) = m.sha256 {
+                                    hasher.update(sh.as_bytes());
+                                }
+                                manifest.media_files.push(file_rel.to_string_lossy().to_string());
+                                manifest.total_copied += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for pid in participants {
+        let token = crate::url_builder::ArchiveUrlBuilder::peer_token(*pid);
+        let avatar_name = format!("{token}.jpg");
+        let dst_file = avatars_dir.join(&avatar_name);
+
+        let src_candidates = [
+            src_base_dir.join("avatars").join(&avatar_name),
+            src_base_dir.join("media/avatars").join(&avatar_name),
+            src_base_dir.join(&avatar_name),
+        ];
+
+        if let Some(src_file) = src_candidates.into_iter().find(|p| p.is_file())
+            && materialize_file(&src_file, &dst_file, media_mode).is_ok()
+        {
+            hasher.update(avatar_name.as_bytes());
+            manifest.avatar_files.push(avatar_name);
+            manifest.total_copied += 1;
+        }
+    }
+
+    for doc_id in reaction_doc_ids {
+        let rx_name = format!("{doc_id}.webp");
+        let dst_file = reactions_dir.join(&rx_name);
+
+        let src_candidates = [
+            src_base_dir.join("reactions").join(&rx_name),
+            src_base_dir.join("media/reactions").join(&rx_name),
+            src_base_dir.join(&rx_name),
+        ];
+
+        if let Some(src_file) = src_candidates.into_iter().find(|p| p.is_file())
+            && materialize_file(&src_file, &dst_file, media_mode).is_ok()
+        {
+            hasher.update(rx_name.as_bytes());
+            manifest.reaction_files.push(rx_name);
+            manifest.total_copied += 1;
+        }
+    }
+
+    if !topic_icon_files.is_empty() {
+        let topic_assets_dir = chat_dir.join("topics/assets");
+        for icon_file in topic_icon_files {
+            let clean_name = icon_file
+                .trim_start_matches('/')
+                .strip_prefix("assets/")
+                .unwrap_or(icon_file);
+            let dst_file = topic_assets_dir.join(clean_name);
+
+            let src_candidates = [
+                src_base_dir.join("topics/assets").join(clean_name),
+                src_base_dir.join("icons").join(clean_name),
+                src_base_dir.join("media/icons").join(clean_name),
+                src_base_dir.join(clean_name),
+            ];
+
+            if let Some(src_file) = src_candidates.into_iter().find(|p| p.is_file()) {
+                if let Some(parent) = dst_file.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                if materialize_file(&src_file, &dst_file, media_mode).is_ok() {
+                    hasher.update(clean_name.as_bytes());
+                    manifest.topic_assets.push(clean_name.to_string());
+                    manifest.total_copied += 1;
+                }
+            }
+        }
+    }
+
+    manifest.media_files.sort();
+    manifest.avatar_files.sort();
+    manifest.reaction_files.sort();
+    manifest.topic_assets.sort();
+
+    Ok(manifest)
+}

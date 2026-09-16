@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt::Write};
+use std::collections::{HashMap, HashSet};
 
 use vendetta_model::PeerId;
 
@@ -7,7 +7,7 @@ use crate::{
     entity::html_escape,
     message::edits::chrono_like_format,
     model::{ExportSummary, PresentationMode, RenderPeer, ThemeMode},
-    url_builder::{ArchiveUrlBuilder, render_avatar_markup},
+    url_builder::ArchiveUrlBuilder,
 };
 
 pub fn render_global_index(
@@ -16,6 +16,7 @@ pub fn render_global_index(
     theme: ThemeMode,
     summary: &ExportSummary,
     available_avatars: &HashSet<PeerId>,
+    chat_dirs: &HashMap<PeerId, String>,
 ) -> String {
     let mode_css = match presentation_mode {
         PresentationMode::TelegramLike => "telegram_like.css",
@@ -28,32 +29,34 @@ pub fn render_global_index(
         ThemeMode::System => "",
     };
 
-    let mut dialogs_html = String::with_capacity(peers.len() * 256);
-    for peer in peers {
-        let default_tid = if peer.is_forum {
-            peer.topics.first().map(|t| t.topic_id)
-        } else {
-            None
-        };
-        let chat_url = ArchiveUrlBuilder::topic_chat_root_url(0, peer.peer_id, default_tid);
-        let avatar_html = render_avatar_markup(
-            Some(peer.peer_id),
-            &peer.name,
-            0,
-            false,
-            "dialog-avatar",
-            available_avatars,
-        );
-        let type_badge = peer.peer_type.as_ref();
+    let dialogs_html: String = peers
+        .iter()
+        .map(|peer| {
+            let default_chat_dir = ArchiveUrlBuilder::peer_token(peer.peer_id);
+            let chat_dir = chat_dirs.get(&peer.peer_id).unwrap_or(&default_chat_dir);
+            let chat_url = format!("chats/{chat_dir}/index.html");
+            let avatar_html = if available_avatars.contains(&peer.peer_id) {
+                let img_src = format!(
+                    "chats/{chat_dir}/avatars/{}.jpg",
+                    ArchiveUrlBuilder::peer_token(peer.peer_id)
+                );
+                let alt = html_escape(&peer.name);
+                format!(
+                    "<div class=\"dialog-avatar\"><img src=\"{img_src}\" alt=\"{alt}\" class=\"avatar-img\"></div>"
+                )
+            } else {
+                let initial = peer.name.chars().next().unwrap_or('?');
+                let text = html_escape(&initial.to_string());
+                format!("<div class=\"dialog-avatar\"><span class=\"avatar-text\">{text}</span></div>")
+            };
+            let type_badge = peer.peer_type.as_ref();
+            let time_str = peer
+                .last_message_date
+                .map(chrono_like_format)
+                .unwrap_or_default();
 
-        let time_str = peer
-            .last_message_date
-            .map(chrono_like_format)
-            .unwrap_or_default();
-
-        let _ = write!(
-            dialogs_html,
-            r#"<li class="dialog-item">
+            format!(
+                r#"<li class="dialog-item">
   <a href="{chat_url}" style="display: flex; gap: 0.75rem; width: 100%; color: inherit; text-decoration: none;">
     {avatar_html}
     <div class="dialog-info">
@@ -66,12 +69,13 @@ pub fn render_global_index(
   </a>
 </li>
 "#,
-            html_escape(&peer.name),
-            html_escape(&time_str),
-            peer.total_messages,
-            html_escape(type_badge)
-        );
-    }
+                html_escape(&peer.name),
+                html_escape(&time_str),
+                peer.total_messages,
+                html_escape(type_badge)
+            )
+        })
+        .collect();
 
     format!(
         r##"<!DOCTYPE html>

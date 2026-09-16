@@ -51,7 +51,7 @@ pub struct SearchPeerMeta {
     pub peer_type: String,
 }
 
-pub fn safe_json_for_script<T: Serialize>(value: &T) -> serde_json::Result<String> {
+pub fn safe_json_for_script<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<String> {
     let json_str = serde_json::to_string(value)?;
     let mut safe_str = String::with_capacity(json_str.len() + 32);
 
@@ -80,5 +80,12 @@ pub fn generate_manifest_js(manifest: &SearchManifest) -> serde_json::Result<Str
     let safe_json = safe_json_for_script(manifest)?;
     Ok(format!(
         "window.__VENDETTA_SEARCH_MANIFEST__ = {safe_json};\n"
+    ))
+}
+
+pub fn generate_chat_search_js(entries: &[SearchEntry]) -> serde_json::Result<String> {
+    let safe_json = safe_json_for_script(entries)?;
+    Ok(format!(
+        "window.__VENDETTA_CHAT_SEARCH__ = {safe_json};\n"
     ))
 }

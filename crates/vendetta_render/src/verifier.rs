@@ -49,6 +49,136 @@ impl HtmlArchiveVerifier {
 
         let export_canonical = normalize_path(&self.export_dir);
 
+        let is_standalone = !self.export_dir.join("chats").exists()
+            && (self.export_dir.join("assets").exists()
+                || self.export_dir.join("topics").exists()
+                || self.export_dir.join("page_00001.html").exists()
+                || self.export_dir.join("media").exists());
+
+        if is_standalone {
+            let index_path = self.export_dir.join("index.html");
+            let page1_path = self.export_dir.join("page_00001.html");
+            if !index_path.exists() && !page1_path.exists() {
+                report.errors.push("Missing index.html or page_00001.html in standalone chat".to_string());
+            }
+
+            let required_standalone_assets = [
+                "assets/css/theme.css",
+                "assets/css/main.css",
+                "assets/icons/symbols.svg",
+            ];
+            for asset in required_standalone_assets {
+                if !self.export_dir.join(asset).exists() {
+                    report.errors.push(format!("Missing standalone asset file: {asset}"));
+                }
+            }
+
+            let chat_search_path = self.export_dir.join("search/index.js");
+            if chat_search_path.exists()
+                && let Ok(content) = fs::read_to_string(&chat_search_path)
+            {
+                let prefix = "window.__VENDETTA_CHAT_SEARCH__ = ";
+                if !content.starts_with(prefix) {
+                    report.errors.push("Invalid search/index.js: missing window.__VENDETTA_CHAT_SEARCH__ wrapper".to_string());
+                }
+            }
+
+            let mut global_anchors = HashSet::new();
+            let mut global_message_anchors = HashSet::new();
+            let mut pending_links = Vec::new();
+
+            let symbols_path = self.export_dir.join("assets/icons/symbols.svg");
+            if let Ok(sym_content) = fs::read_to_string(&symbols_path) {
+                for part in sym_content.split(" id=\"").skip(1) {
+                    if let Some((id_val, _)) = part.split_once('"') {
+                        global_anchors.insert(id_val.to_string());
+                    }
+                }
+            }
+
+            let mut html_files = Vec::new();
+            collect_html_files(&self.export_dir, &mut html_files);
+            for path in html_files {
+                report.total_pages_checked += 1;
+                self.scan_html_file(
+                    &path,
+                    &mut global_anchors,
+                    &mut global_message_anchors,
+                    &mut pending_links,
+                    &mut report,
+                    None,
+                )?;
+            }
+
+            for (src_file, target_url) in pending_links {
+                report.total_links_checked += 1;
+                if target_url.starts_with('#') {
+                    let anchor = target_url.trim_start_matches('#');
+                    if anchor != "blocked-unsafe-url" && !global_anchors.contains(anchor) {
+                        report.errors.push(format!(
+                            "Broken anchor in {}: #{}",
+                            src_file.display(),
+                            anchor
+                        ));
+                    }
+                } else if !target_url.starts_with("http://")
+                    && !target_url.starts_with("https://")
+                    && !target_url.starts_with("mailto:")
+                    && !target_url.starts_with("tel:")
+                    && !target_url.starts_with("tg:")
+                    && !target_url.starts_with("ton:")
+                    && !target_url.starts_with("ftp://")
+                    && !target_url.starts_with("ftps://")
+                {
+                    if target_url.contains('\0') || target_url.contains(':') {
+                        report.errors.push(format!(
+                            "Link traversal escape detected in {}: invalid characters in '{}'",
+                            src_file.display(),
+                            target_url
+                        ));
+                        continue;
+                    }
+
+                    let (rel_path, anchor_opt) = if let Some((p, a)) = target_url.split_once('#') {
+                        (p, Some(a))
+                    } else {
+                        (target_url.as_str(), None)
+                    };
+
+                    let parent = src_file.parent().unwrap_or(&self.export_dir);
+                    let resolved_target = normalize_path(&parent.join(rel_path));
+
+                    if resolved_target.starts_with(&export_canonical) {
+                        if !resolved_target.exists() {
+                            report.errors.push(format!(
+                                "Broken relative link in {}: target does not exist: {}",
+                                src_file.display(),
+                                resolved_target.display()
+                            ));
+                        } else if let Some(anchor) = anchor_opt
+                            && !global_anchors.contains(anchor)
+                        {
+                            report.errors.push(format!(
+                                "Broken link anchor in {}: target file exists but anchor #{} is missing",
+                                src_file.display(),
+                                anchor
+                            ));
+                        }
+                    }
+                }
+            }
+
+            if !report.is_success() {
+                return Err(RenderError::VerificationFailed(format!(
+                    "Verification encountered {} errors:\n{}",
+                    report.errors.len(),
+                    report.errors.join("\n")
+                )));
+            }
+
+            return Ok(report);
+        }
+
         let manifest_path = self.export_dir.join("manifest.json");
         let manifest = if !manifest_path.exists() {
             report.errors.push("Missing manifest.json".to_string());
@@ -124,23 +254,26 @@ impl HtmlArchiveVerifier {
         if chats_dir.exists() {
             let chat_entries = fs::read_dir(&chats_dir)?;
             for chat_entry in chat_entries.flatten() {
-                if chat_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                if chat_entry.file_type().is_ok_and(|t| t.is_dir()) {
                     discovered_dialogs += 1;
-                    let page_entries = fs::read_dir(chat_entry.path())?;
-                    for page in page_entries.flatten() {
-                        let path = page.path();
-                        if path.extension().and_then(|s| s.to_str()) == Some("html") {
-                            report.total_pages_checked += 1;
+                    let mut chat_html_pages = Vec::new();
+                    collect_html_files(&chat_entry.path(), &mut chat_html_pages);
+                    for path in chat_html_pages {
+                        let is_index_file = path.file_name().is_some_and(|s| s == "index.html");
+                        let is_topic_root_redirect = chat_entry.path().join("topics").exists() && path.parent() == Some(&chat_entry.path());
+                        let is_chunk_page = !is_index_file && !is_topic_root_redirect;
+                        if is_chunk_page {
                             all_chat_pages.insert(path.clone());
-                            self.scan_html_file(
-                                &path,
-                                &mut global_anchors,
-                                &mut global_message_anchors,
-                                &mut pending_links,
-                                &mut report,
-                                manifest.as_ref().map(|m| m.media_mode.as_str()),
-                            )?;
                         }
+                        report.total_pages_checked += 1;
+                        self.scan_html_file(
+                            &path,
+                            &mut global_anchors,
+                            &mut global_message_anchors,
+                            &mut pending_links,
+                            &mut report,
+                            manifest.as_ref().map(|m| m.media_mode.as_str()),
+                        )?;
                     }
                 }
             }
@@ -428,6 +561,10 @@ impl HtmlArchiveVerifier {
         for part in content.split(" src=\"").skip(1) {
             if let Some((src_val, _)) = part.split_once('"')
                 && src_val.contains("media/")
+                && (src_val.contains("media/")
+                    || src_val.contains("avatars/")
+                    || src_val.contains("reactions/")
+                    || src_val.contains("topics/assets/"))
             {
                 report.total_media_checked += 1;
 
@@ -474,8 +611,7 @@ impl HtmlArchiveVerifier {
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in path.components() {
+    path.components().fold(PathBuf::new(), |mut out, comp| {
         match comp {
             Component::Normal(c) => out.push(c),
             Component::ParentDir => {
@@ -485,6 +621,22 @@ fn normalize_path(path: &Path) -> PathBuf {
             Component::Prefix(p) => out.push(p.as_os_str()),
             Component::CurDir => {}
         }
-    }
-    out
+        out
+    })
 }
+
+fn collect_html_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        let mut sorted_entries: Vec<_> = entries.flatten().collect();
+        sorted_entries.sort_by_key(|e| e.path());
+        for entry in sorted_entries {
+            let p = entry.path();
+            if p.is_dir() {
+                collect_html_files(&p, out);
+            } else if p.extension().is_some_and(|s| s == "html") {
+                out.push(p);
+            }
+        }
+    }
+}
+
