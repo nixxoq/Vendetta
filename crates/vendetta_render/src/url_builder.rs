@@ -43,9 +43,10 @@ impl ArchiveUrlBuilder {
 
     pub fn topic_chunk_file_rel(peer_id: PeerId, topic_id: i32, page_index: usize) -> String {
         format!(
-            "{}/{}",
+            "{}/topics/{}/{}",
             Self::peer_dir_rel(peer_id),
-            Self::topic_page_file_name(topic_id, page_index)
+            topic_id,
+            Self::page_file_name(page_index)
         )
     }
 
@@ -99,7 +100,7 @@ impl ArchiveUrlBuilder {
         target_page_index: usize,
     ) -> String {
         let file_name = if let Some(tid) = target_topic_id {
-            Self::topic_page_file_name(tid, target_page_index)
+            format!("topics/{tid}/{}", Self::page_file_name(target_page_index))
         } else {
             Self::page_file_name(target_page_index)
         };
@@ -169,6 +170,83 @@ impl ArchiveUrlBuilder {
     pub fn avatar_url(from_depth: usize, peer_id: PeerId) -> String {
         Self::relative_url(from_depth, &Self::avatar_rel_path(peer_id))
     }
+
+    pub fn scoped_media_url(from_depth: usize, local_rel_path: &str) -> String {
+        let clean = local_rel_path.trim_start_matches('/');
+        let clean = clean.strip_prefix("media/").unwrap_or(clean);
+        Self::relative_url(from_depth, &format!("media/{clean}"))
+    }
+
+    pub fn scoped_avatar_url(from_depth: usize, peer_id: PeerId) -> String {
+        let token = Self::peer_token(peer_id);
+        Self::relative_url(from_depth, &format!("avatars/{token}.jpg"))
+    }
+
+    pub fn scoped_reaction_url(from_depth: usize, document_id: i64) -> String {
+        Self::relative_url(from_depth, &format!("reactions/{document_id}.webp"))
+    }
+
+    pub fn scoped_topic_asset_url(from_depth: usize, asset_name: &str) -> String {
+        let clean = asset_name.trim_start_matches('/');
+        let clean = clean.strip_prefix("assets/").unwrap_or(clean);
+        if from_depth == 2 {
+            format!("../assets/{clean}")
+        } else if from_depth == 5 {
+            format!("../../../../assets/{clean}")
+        } else if from_depth == 0 {
+            format!("topics/assets/{clean}")
+        } else {
+            Self::relative_url(from_depth, &format!("topics/assets/{clean}"))
+        }
+    }
+
+    pub fn day_page_file_name(
+        year: i32,
+        month: u32,
+        day: u32,
+        structure: crate::model::DateStructure,
+    ) -> String {
+        match structure {
+            crate::model::DateStructure::Flat => format!("{year:04}-{month:02}-{day:02}.html"),
+            crate::model::DateStructure::Tree => {
+                format!("days/{year:04}/{month:02}/{year:04}-{month:02}-{day:02}.html")
+            }
+        }
+    }
+
+    pub fn day_page_depth(in_topic: bool, structure: crate::model::DateStructure) -> usize {
+        let base_depth = if in_topic { 2 } else { 0 };
+        let tree_depth = match structure {
+            crate::model::DateStructure::Flat => 0,
+            crate::model::DateStructure::Tree => 3,
+        };
+        base_depth + tree_depth
+    }
+
+    pub fn relative_day_to_day(from_rel: &str, to_rel: &str) -> String {
+        let from_parts: Vec<&str> = from_rel.split('/').collect();
+        let to_parts: Vec<&str> = to_rel.split('/').collect();
+
+        let from_dir = from_parts.split_last().map_or(&[][..], |(_, dir)| dir);
+        let to_dir = to_parts.split_last().map_or(&[][..], |(_, dir)| dir);
+
+        let common_len = from_dir
+            .iter()
+            .zip(to_dir.iter())
+            .take_while(|(f, t)| f == t)
+            .count();
+
+        let up_count = from_dir.len().saturating_sub(common_len);
+        let remaining_to = to_parts.get(common_len..).unwrap_or(&[]);
+
+        format!("{}{}", "../".repeat(up_count), remaining_to.join("/"))
+    }
+
+    pub fn scoped_asset_url(from_depth: usize, asset_rel_path: &str) -> String {
+        let clean = asset_rel_path.trim_start_matches('/');
+        let clean = clean.strip_prefix("assets/").unwrap_or(clean);
+        Self::relative_url(from_depth, &format!("assets/{clean}"))
+    }
 }
 
 pub fn render_avatar_markup(
@@ -185,7 +263,7 @@ pub fn render_avatar_markup(
     if let Some(pid) = peer_id
         && available_avatars.contains(&pid)
     {
-        let img_src = ArchiveUrlBuilder::avatar_url(from_depth, pid);
+        let img_src = ArchiveUrlBuilder::scoped_avatar_url(from_depth, pid);
         let alt = html_escape(name);
         return format!(
             "<div class=\"{cls}\"><img src=\"{img_src}\" alt=\"{alt}\" class=\"avatar-img\"></div>"
