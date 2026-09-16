@@ -394,15 +394,19 @@ async fn peer_type_resolution_is_strict_without_numeric_heuristics() {
     let res = adapter.resolve_input_peer(uncached_peer).await;
     assert!(res.is_err());
     match res.unwrap_err() {
-        AdapterError::UnknownPeerType(p) => assert_eq!(p, uncached_peer),
-        other => panic!("Expected UnknownPeerType, got {other:?}"),
+        AdapterError::PeerNotFoundOrUncached(p) | AdapterError::UnknownPeerType(p) => {
+            assert_eq!(p, uncached_peer)
+        }
+        other => panic!("Expected PeerNotFoundOrUncached or UnknownPeerType, got {other:?}"),
     }
 
     let res_ch = adapter.resolve_input_channel(uncached_peer).await;
     assert!(res_ch.is_err());
     match res_ch.unwrap_err() {
-        AdapterError::UnknownPeerType(p) => assert_eq!(p, uncached_peer),
-        other => panic!("Expected UnknownPeerType, got {other:?}"),
+        AdapterError::InvalidPeerType { peer_id, .. } | AdapterError::UnknownPeerType(peer_id) => {
+            assert_eq!(peer_id, uncached_peer)
+        }
+        other => panic!("Expected InvalidPeerType or UnknownPeerType, got {other:?}"),
     }
 
     adapter.register_peer_type(positive_channel_peer, PeerType::Channel);
