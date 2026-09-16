@@ -10,6 +10,10 @@ pub fn run_export_html(
     archive_db_path: &Path,
     options: ExportOptions,
     disable_forum_render: bool,
+    readable_names: bool,
+    date_range: (Option<i64>, Option<i64>),
+    split_by: vendetta_render::SplitBy,
+    date_structure: vendetta_render::DateStructure,
 ) -> Result<ExportSummary> {
     info!(
         "Opening SQLite archive database at {}",
@@ -25,7 +29,11 @@ pub fn run_export_html(
     );
 
     let exporter = HtmlArchiveExporter::new(&db, options)
-        .with_disable_forum_render(disable_forum_render);
+        .with_disable_forum_render(disable_forum_render)
+        .with_readable_names(readable_names)
+        .with_date_range(date_range.0, date_range.1)
+        .with_split_by(split_by)
+        .with_date_structure(date_structure);
     let summary = exporter
         .export_with_progress(|stage, current, total| {
             if total > 0 && current > 0 {

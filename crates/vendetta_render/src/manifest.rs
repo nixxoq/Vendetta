@@ -144,20 +144,217 @@ pub fn compute_export_config_fingerprint(options: &ExportOptions) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+pub fn compute_export_config_fingerprint_full(
+    options: &ExportOptions,
+    readable_names: bool,
+    from_date: Option<i64>,
+    to_date: Option<i64>,
+    split_by: crate::model::SplitBy,
+    date_structure: crate::model::DateStructure,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(compute_export_config_fingerprint(options).as_bytes());
+    hasher.update([readable_names as u8]);
+    if let Some(fd) = from_date {
+        hasher.update(fd.to_le_bytes());
+    }
+    if let Some(td) = to_date {
+        hasher.update(td.to_le_bytes());
+    }
+    hasher.update(split_by.as_ref().as_bytes());
+    hasher.update(date_structure.as_ref().as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+pub fn compute_chat_fingerprint(
+    db: &ArchiveDb,
+    peer_id: i64,
+    export_config_fingerprint: &str,
+    from_date: Option<i64>,
+    to_date: Option<i64>,
+) -> StorageResult<String> {
+    db.with_conn(|conn| {
+        let mut hasher = Sha256::new();
+        hasher.update(peer_id.to_le_bytes());
+        hasher.update(export_config_fingerprint.as_bytes());
+        if let Some(fd) = from_date {
+            hasher.update(fd.to_le_bytes());
+        }
+        if let Some(td) = to_date {
+            hasher.update(td.to_le_bytes());
+        }
+
+        let peer_name: Option<String> = conn
+            .query_row(
+                "SELECT name FROM peers WHERE peer_id = ?1",
+                [peer_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(None);
+        if let Some(name) = peer_name {
+            hasher.update(name.as_bytes());
+        }
+
+        let query = match (from_date, to_date) {
+            (Some(f), Some(t)) => format!(
+                "SELECT m.message_id, m.date, m.state, m.text, COALESCE(mo.sha256, '')
+                 FROM messages m
+                 LEFT JOIN message_media mm ON m.peer_id = mm.peer_id AND m.message_id = mm.message_id
+                 LEFT JOIN media_objects mo ON mm.media_id = mo.media_id
+                 WHERE m.peer_id = {peer_id} AND m.date >= {f} AND m.date <= {t}
+                 ORDER BY m.message_id ASC"
+            ),
+            (Some(f), None) => format!(
+                "SELECT m.message_id, m.date, m.state, m.text, COALESCE(mo.sha256, '')
+                 FROM messages m
+                 LEFT JOIN message_media mm ON m.peer_id = mm.peer_id AND m.message_id = mm.message_id
+                 LEFT JOIN media_objects mo ON mm.media_id = mo.media_id
+                 WHERE m.peer_id = {peer_id} AND m.date >= {f}
+                 ORDER BY m.message_id ASC"
+            ),
+            (None, Some(t)) => format!(
+                "SELECT m.message_id, m.date, m.state, m.text, COALESCE(mo.sha256, '')
+                 FROM messages m
+                 LEFT JOIN message_media mm ON m.peer_id = mm.peer_id AND m.message_id = mm.message_id
+                 LEFT JOIN media_objects mo ON mm.media_id = mo.media_id
+                 WHERE m.peer_id = {peer_id} AND m.date <= {t}
+                 ORDER BY m.message_id ASC"
+            ),
+            (None, None) => format!(
+                "SELECT m.message_id, m.date, m.state, m.text, COALESCE(mo.sha256, '')
+                 FROM messages m
+                 LEFT JOIN message_media mm ON m.peer_id = mm.peer_id AND m.message_id = mm.message_id
+                 LEFT JOIN media_objects mo ON mm.media_id = mo.media_id
+                 WHERE m.peer_id = {peer_id}
+                 ORDER BY m.message_id ASC"
+            ),
+        };
+
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt.query_map([], |row| {
+            let mid: i64 = row.get(0)?;
+            let date: i64 = row.get(1)?;
+            let state: String = row.get(2)?;
+            let text: Option<String> = row.get(3)?;
+            let media_sha: String = row.get(4)?;
+            Ok((mid, date, state, text, media_sha))
+        })?;
+
+        for r in rows {
+            let (mid, date, state, text, media_sha) = r?;
+            hasher.update(mid.to_le_bytes());
+            hasher.update(date.to_le_bytes());
+            hasher.update(state.as_bytes());
+            if let Some(t) = text {
+                hasher.update(t.as_bytes());
+            }
+            if !media_sha.is_empty() {
+                hasher.update(media_sha.as_bytes());
+            }
+        }
+
+        Ok(format!("{:x}", hasher.finalize()))
+    })
+}
+
+pub fn compute_day_fingerprint(
+    day_msgs: &[crate::model::RenderMessage],
+    config_fingerprint: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(config_fingerprint.as_bytes());
+    for m in day_msgs {
+        hasher.update(m.key.message_id.raw().to_le_bytes());
+        hasher.update(m.date.to_le_bytes());
+        for rev in &m.revisions {
+            if let Some(ed) = rev.edit_date {
+                hasher.update(ed.to_le_bytes());
+            }
+            if let Some(rt) = &rev.raw_text {
+                hasher.update(rt.as_bytes());
+            }
+        }
+        if let Some(t) = &m.raw_text {
+            hasher.update(t.as_bytes());
+        }
+        hasher.update(format!("{:?}", m.state).as_bytes());
+        for r in &m.reactions {
+            hasher.update(format!("{:?}", r.reaction).as_bytes());
+            hasher.update((r.count as u64).to_le_bytes());
+        }
+        for med in &m.media_items {
+            hasher.update(med.record.media_id.as_bytes());
+            if let Some(sha) = &med.record.sha256 {
+                hasher.update(sha.as_bytes());
+            }
+        }
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ManifestChatEntry {
+    pub peer_id: i64,
+    pub directory: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub fingerprint: String,
+    #[serde(default)]
+    pub pages: Vec<String>,
+    #[serde(default)]
+    pub day_fingerprints: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub media_files: Vec<String>,
+    #[serde(default)]
+    pub avatar_files: Vec<String>,
+    #[serde(default)]
+    pub reaction_files: Vec<String>,
+    #[serde(default)]
+    pub topic_assets: Vec<String>,
+}
+
+fn default_export_format() -> String {
+    "chat-portable-v1".to_string()
+}
+
+fn default_renderer_version() -> String {
+    "vendetta_render_v2".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HtmlExportManifest {
     pub format_version: u32,
+    #[serde(default = "default_export_format")]
+    pub export_format: String,
+    #[serde(default = "default_renderer_version")]
+    pub renderer_version: String,
+    #[serde(default)]
+    pub readable_names: bool,
+    #[serde(default)]
+    pub from_date: Option<i64>,
+    #[serde(default)]
+    pub to_date: Option<i64>,
+    #[serde(default)]
+    pub split_by: Option<String>,
+    #[serde(default)]
+    pub date_structure: Option<String>,
     pub presentation_mode: String,
     pub media_mode: String,
     pub chunk_size: usize,
     pub source_fingerprint: DatasetFingerprint,
     pub export_config_fingerprint: String,
     pub summary: ExportSummary,
+    #[serde(default)]
+    pub chats: Vec<ManifestChatEntry>,
 }
 
 impl HtmlExportManifest {
     pub fn write_to_file(&self, path: &Path) -> std::io::Result<()> {
-        fs::write(path, serde_json::to_string_pretty(self)?)
+        let tmp_path = path.with_extension("json.tmp");
+        let content = serde_json::to_string_pretty(self)?;
+        fs::write(&tmp_path, content)?;
+        fs::rename(&tmp_path, path)?;
+        Ok(())
     }
 
     pub fn read_from_file(path: &Path) -> std::io::Result<Self> {
