@@ -57,27 +57,56 @@ impl HistoryIngestionPipeline {
         adapter: &A,
         db: &ArchiveDb,
         peer_id: PeerId,
+        on_batch: F,
+    ) -> SyncResult<IngestSummary>
+    where
+        F: FnMut(&HistoryBatchProgress),
+    {
+        self.ingest_history_ranged_with_progress(adapter, db, peer_id, None, None, on_batch)
+            .await
+    }
+
+    pub async fn ingest_history_ranged_with_progress<A: ?Sized + TelegramAdapter, F>(
+        &self,
+        adapter: &A,
+        db: &ArchiveDb,
+        peer_id: PeerId,
+        from_date: Option<i64>,
+        to_date: Option<i64>,
         mut on_batch: F,
     ) -> SyncResult<IngestSummary>
     where
         F: FnMut(&HistoryBatchProgress),
     {
+        let is_ranged = from_date.is_some() || to_date.is_some();
         let existing_state = db.get_sync_state(peer_id)?;
 
-        let mut offset_id = existing_state
-            .as_ref()
-            .and_then(|s| s.min_message_id)
-            .map(MessageId::new);
+        let mut offset_id = if is_ranged {
+            None
+        } else {
+            existing_state
+                .as_ref()
+                .and_then(|s| s.min_message_id)
+                .map(MessageId::new)
+        };
 
-        let mut overall_min_id = existing_state
-            .as_ref()
-            .and_then(|s| s.min_message_id)
-            .map(MessageId::new);
+        let mut overall_min_id = if is_ranged {
+            None
+        } else {
+            existing_state
+                .as_ref()
+                .and_then(|s| s.min_message_id)
+                .map(MessageId::new)
+        };
 
-        let mut overall_max_id = existing_state
-            .as_ref()
-            .and_then(|s| s.max_message_id)
-            .map(MessageId::new);
+        let mut overall_max_id = if is_ranged {
+            None
+        } else {
+            existing_state
+                .as_ref()
+                .and_then(|s| s.max_message_id)
+                .map(MessageId::new)
+        };
 
         let mut batches_committed = 0;
         let mut total_messages = 0;
@@ -106,52 +135,87 @@ impl HistoryIngestionPipeline {
                 });
             }
 
-            if let Some(b_min) = batch_min_id {
-                overall_min_id = Some(overall_min_id.map_or(b_min, |cur| cur.min(b_min)));
-            }
-
-            if let Some(b_max) = batch_max_id {
-                overall_max_id = Some(overall_max_id.map_or(b_max, |cur| cur.max(b_max)));
-            }
-
-            let sync_state = SyncStateRecord {
-                peer_id,
-                pts: page
-                    .pts
-                    .or_else(|| existing_state.as_ref().and_then(|s| s.pts)),
-                qts: existing_state.as_ref().and_then(|s| s.qts),
-                date: existing_state.as_ref().and_then(|s| s.date),
-                seq: existing_state.as_ref().and_then(|s| s.seq),
-                min_message_id: overall_min_id.map(|id| id.raw()),
-                max_message_id: overall_max_id.map(|id| id.raw()),
-                last_synced_at: now_unix_secs(),
+            let filtered_messages: Vec<_> = if is_ranged {
+                page.messages
+                    .iter()
+                    .filter(|m| {
+                        if let Some(to) = to_date
+                            && m.date > to
+                        {
+                            return false;
+                        }
+                        if let Some(from) = from_date
+                            && m.date < from
+                        {
+                            return false;
+                        }
+                        true
+                    })
+                    .cloned()
+                    .collect()
+            } else {
+                page.messages.clone()
             };
 
-            db.ingest_history_page(
-                peer_id,
-                &page.messages,
-                &page.auxiliary_peers,
-                Some(&sync_state),
-            )?;
+            let filtered_len = filtered_messages.len();
 
-            batches_committed += 1;
-            total_messages += batch_len;
-            total_aux_peers += page.auxiliary_peers.len();
+            let sync_state_opt = if !is_ranged {
+                if let Some(b_min) = batch_min_id {
+                    overall_min_id = Some(overall_min_id.map_or(b_min, |cur| cur.min(b_min)));
+                }
+                if let Some(b_max) = batch_max_id {
+                    overall_max_id = Some(overall_max_id.map_or(b_max, |cur| cur.max(b_max)));
+                }
+                Some(SyncStateRecord {
+                    peer_id,
+                    pts: page
+                        .pts
+                        .or_else(|| existing_state.as_ref().and_then(|s| s.pts)),
+                    qts: existing_state.as_ref().and_then(|s| s.qts),
+                    date: existing_state.as_ref().and_then(|s| s.date),
+                    seq: existing_state.as_ref().and_then(|s| s.seq),
+                    min_message_id: overall_min_id.map(|id| id.raw()),
+                    max_message_id: overall_max_id.map(|id| id.raw()),
+                    last_synced_at: now_unix_secs(),
+                })
+            } else {
+                None
+            };
 
-            debug!(
-                "Committed batch {} for peer {} ({} messages, cursor: {:?})",
-                batches_committed, peer_id, batch_len, batch_min_id
-            );
+            if !is_ranged || filtered_len > 0 {
+                db.ingest_history_page(
+                    peer_id,
+                    &filtered_messages,
+                    &page.auxiliary_peers,
+                    sync_state_opt.as_ref(),
+                )?;
 
-            on_batch(&HistoryBatchProgress {
-                peer_id,
-                batch_number: batches_committed,
-                batch_messages_count: batch_len,
-                current_peer_messages_count: total_messages,
-                min_message_id: batch_min_id,
-            });
+                batches_committed += 1;
+                total_messages += filtered_len;
+                total_aux_peers += page.auxiliary_peers.len();
+
+                debug!(
+                    "Committed batch {} for peer {} ({} messages, cursor: {:?})",
+                    batches_committed, peer_id, filtered_len, batch_min_id
+                );
+
+                on_batch(&HistoryBatchProgress {
+                    peer_id,
+                    batch_number: batches_committed,
+                    batch_messages_count: filtered_len,
+                    current_peer_messages_count: total_messages,
+                    min_message_id: batch_min_id,
+                });
+            }
 
             offset_id = batch_min_id;
+
+            if let Some(from) = from_date
+                && let Some(oldest_in_batch) = page.messages.last().map(|m| m.date)
+                && oldest_in_batch < from
+            {
+                break;
+            }
 
             if batch_len < self.chunk_size {
                 break;

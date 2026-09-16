@@ -176,7 +176,7 @@ impl<A: ?Sized + TelegramAdapter> ChannelQueueWorker<A> {
                     .is_some_and(|p| p.peer_type == PeerType::Channel);
 
             if is_channel {
-                if diag.is_unresolved || diag.pts.is_none() {
+                let Some(server_pts) = diag.pts.filter(|_| !diag.is_unresolved) else {
                     debug!(
                         channel_id = diag.peer_id.raw(),
                         "Channel is unresolved or missing authoritative server PTS; marking BLOCKED"
@@ -195,9 +195,8 @@ impl<A: ?Sized + TelegramAdapter> ChannelQueueWorker<A> {
                         updated_at: now,
                     })?;
                     continue;
-                }
+                };
 
-                let server_pts = diag.pts.unwrap();
                 let local_state = self.storage.get_peer_sync_state(diag.peer_id)?;
                 let local_pts = local_state.and_then(|s| s.pts);
 

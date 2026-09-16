@@ -161,6 +161,104 @@ impl<A: ?Sized + TelegramAdapter> CoordinatedSyncPipeline<A> {
             .await
     }
 
+    pub async fn run_ranged_backfill(
+        &self,
+        target_peers: &[PeerId],
+        from_date: Option<i64>,
+        to_date: Option<i64>,
+    ) -> SyncResult<FullSyncRunSummary> {
+        let is_explicit = !target_peers.is_empty();
+        self.run_ranged_backfill_with_progress(
+            target_peers,
+            is_explicit,
+            from_date,
+            to_date,
+            |_| {},
+        )
+        .await
+    }
+
+    pub async fn run_ranged_backfill_with_progress<F>(
+        &self,
+        target_peers: &[PeerId],
+        is_explicit_scope: bool,
+        from_date: Option<i64>,
+        to_date: Option<i64>,
+        mut on_progress: F,
+    ) -> SyncResult<FullSyncRunSummary>
+    where
+        F: FnMut(&SyncProgressEvent),
+    {
+        let mut summary = FullSyncRunSummary::default();
+        let total_peers_count = target_peers.len();
+        let mut total_batches_completed = 0;
+
+        debug!(
+            "Starting historical backfill (from: {:?}, to: {:?})",
+            from_date, to_date
+        );
+        for (idx, &peer_id) in target_peers.iter().enumerate() {
+            let peer_index = idx + 1;
+            let peer_name = self
+                .storage
+                .get_peer(peer_id)
+                .ok()
+                .flatten()
+                .and_then(|p| p.name);
+
+            on_progress(&SyncProgressEvent {
+                step: SyncStep::IngestingHistory,
+                peer_index,
+                total_peers: total_peers_count,
+                current_peer_id: Some(peer_id),
+                current_peer_name: peer_name.clone(),
+                current_peer_messages: 0,
+                total_messages_processed: summary.history_messages_ingested,
+                total_batches_completed,
+                flood_wait_seconds: None,
+                status_detail: Some(format!(
+                    "Backfilling history range for peer {}",
+                    peer_id.raw()
+                )),
+            });
+
+            let hist_summary = self
+                .history_pipeline
+                .ingest_history_ranged_with_progress(
+                    self.adapter.as_ref(),
+                    self.storage.as_ref(),
+                    peer_id,
+                    from_date,
+                    to_date,
+                    |batch_progress| {
+                        let processed = summary.history_messages_ingested
+                            + batch_progress.current_peer_messages_count;
+                        total_batches_completed += 1;
+                        on_progress(&SyncProgressEvent {
+                            step: SyncStep::IngestingHistory,
+                            peer_index,
+                            total_peers: total_peers_count,
+                            current_peer_id: Some(peer_id),
+                            current_peer_name: peer_name.clone(),
+                            current_peer_messages: batch_progress.current_peer_messages_count,
+                            total_messages_processed: processed,
+                            total_batches_completed,
+                            flood_wait_seconds: None,
+                            status_detail: None,
+                        });
+                    },
+                )
+                .await?;
+
+            summary.history_messages_ingested += hist_summary.messages_ingested;
+        }
+
+        summary.requested_peers_count = total_peers_count;
+        summary.is_explicit_scope = is_explicit_scope;
+
+        Ok(summary)
+    }
+
     pub async fn run_full_sync_with_scope<F>(
         &self,
         target_peers: &[PeerId],
