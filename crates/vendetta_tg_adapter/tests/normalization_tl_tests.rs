@@ -246,3 +246,96 @@ fn real_tl_empty_message_normalizes_to_empty_state() {
     assert_eq!(rec.text.as_deref(), Some("[Empty / Unavailable Message]"));
     assert_eq!(rec.raw_tl.as_deref(), Some(empty_tl.to_bytes().as_slice()));
 }
+
+#[test]
+fn extract_media_records_from_service_messages() {
+    use vendetta_model::{MediaKind, MediaRole};
+    use vendetta_tg_adapter::extract_media_records;
+
+    let dummy_photo = tl::enums::Photo::Photo(tl::types::Photo {
+        has_stickers: false,
+        id: 99887766,
+        access_hash: 11223344,
+        file_reference: vec![1, 2, 3, 4],
+        date: 1700000000,
+        sizes: vec![tl::enums::PhotoSize::Size(tl::types::PhotoSize {
+            r#type: "x".to_string(),
+            w: 800,
+            h: 600,
+            size: 45000,
+        })],
+        video_sizes: None,
+        dc_id: 2,
+    });
+
+    // 1. SuggestProfilePhoto
+    let suggest_msg = tl::enums::Message::Service(tl::types::MessageService {
+        out: false,
+        mentioned: false,
+        media_unread: false,
+        silent: false,
+        post: false,
+        legacy: false,
+        reactions_are_possible: false,
+        id: 501,
+        from_id: Some(tl::enums::Peer::User(tl::types::PeerUser { user_id: 111 })),
+        peer_id: tl::enums::Peer::User(tl::types::PeerUser { user_id: 222 }),
+        saved_peer_id: None,
+        reply_to: None,
+        date: 1700001000,
+        action: tl::enums::MessageAction::SuggestProfilePhoto(
+            tl::types::MessageActionSuggestProfilePhoto {
+                photo: dummy_photo.clone(),
+            },
+        ),
+        reactions: None,
+        ttl_period: None,
+    });
+
+    let extracted_suggest = extract_media_records(&suggest_msg, None);
+    assert_eq!(extracted_suggest.len(), 1);
+    let (rec, join) = &extracted_suggest[0];
+    assert_eq!(rec.kind, MediaKind::Photo);
+    assert_eq!(rec.media_id, "photo_99887766_x");
+    assert_eq!(join.role, MediaRole::Attachment);
+    assert_eq!(join.position, 0);
+
+    let norm_suggest = normalize_message(&suggest_msg, None);
+    assert_eq!(
+        norm_suggest.text.as_deref(),
+        Some("Suggested profile photo")
+    );
+
+    // 2. ChatEditPhoto
+    let chat_edit_msg = tl::enums::Message::Service(tl::types::MessageService {
+        out: false,
+        mentioned: false,
+        media_unread: false,
+        silent: false,
+        post: false,
+        legacy: false,
+        reactions_are_possible: false,
+        id: 502,
+        from_id: Some(tl::enums::Peer::User(tl::types::PeerUser { user_id: 111 })),
+        peer_id: tl::enums::Peer::Chat(tl::types::PeerChat { chat_id: 333 }),
+        saved_peer_id: None,
+        reply_to: None,
+        date: 1700002000,
+        action: tl::enums::MessageAction::ChatEditPhoto(tl::types::MessageActionChatEditPhoto {
+            photo: dummy_photo,
+        }),
+        reactions: None,
+        ttl_period: None,
+    });
+
+    let extracted_edit = extract_media_records(&chat_edit_msg, None);
+    assert_eq!(extracted_edit.len(), 1);
+    let (rec2, join2) = &extracted_edit[0];
+    assert_eq!(rec2.kind, MediaKind::Photo);
+    assert_eq!(rec2.media_id, "photo_99887766_x");
+    assert_eq!(join2.role, MediaRole::Attachment);
+    assert_eq!(join2.position, 0);
+
+    let norm_edit = normalize_message(&chat_edit_msg, None);
+    assert_eq!(norm_edit.text.as_deref(), Some("Changed group photo"));
+}
