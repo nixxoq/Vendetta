@@ -272,6 +272,7 @@ fn format_action_text(action: &tl::enums::MessageAction) -> String {
                 "Edited topic".to_string()
             }
         }
+        tl::enums::MessageAction::SuggestProfilePhoto(_) => "Suggested profile photo".to_string(),
         tl::enums::MessageAction::Empty => "Service notification".to_string(),
         _ => "Service action".to_string(),
     }
@@ -783,21 +784,48 @@ pub fn extract_media_records(
 ) -> Vec<(MediaRecord, MessageMediaJoin)> {
     let mut results = Vec::new();
 
-    let m = match msg {
-        tl::enums::Message::Message(m) => m,
+    let (msg_key, media, service_action) = match msg {
+        tl::enums::Message::Message(m) => {
+            let peer_id = fallback_peer_id.unwrap_or_else(|| normalize_peer_enum(&m.peer_id));
+            (
+                MessageKey::new(peer_id, MessageId::new(m.id as i64)),
+                m.media.as_ref(),
+                None,
+            )
+        }
+        tl::enums::Message::Service(s) => {
+            let peer_id = fallback_peer_id.unwrap_or_else(|| normalize_peer_enum(&s.peer_id));
+            (
+                MessageKey::new(peer_id, MessageId::new(s.id as i64)),
+                None,
+                Some(&s.action),
+            )
+        }
         _ => return results,
-    };
-
-    let peer_id = fallback_peer_id.unwrap_or_else(|| normalize_peer_enum(&m.peer_id));
-    let msg_key = MessageKey::new(peer_id, MessageId::new(m.id as i64));
-
-    let media = match &m.media {
-        Some(med) => med,
-        None => return results,
     };
 
     let now = now_unix_secs();
     let mut position = 0;
+
+    if let Some(action) = service_action {
+        let photo = match action {
+            tl::enums::MessageAction::SuggestProfilePhoto(suggest) => Some(&suggest.photo),
+            tl::enums::MessageAction::ChatEditPhoto(edit) => Some(&edit.photo),
+            _ => None,
+        };
+        if let Some(photo) = photo
+            && let Some(item) =
+                extract_photo_record(photo, msg_key, MediaRole::Attachment, position, now)
+        {
+            results.push(item);
+        }
+        return results;
+    }
+
+    let media = match media {
+        Some(med) => med,
+        None => return results,
+    };
 
     match media {
         tl::enums::MessageMedia::Photo(photo_media) => {

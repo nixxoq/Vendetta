@@ -8,6 +8,7 @@ members = [
     "crates/vendetta_media",
     "crates/vendetta_render",
     "crates/vendetta_verify",
+    "crates/vendetta_import",
     "crates/vendetta_cli",
 ]
 resolver = "2"
@@ -37,6 +38,7 @@ vendetta_sync = { path = "crates/vendetta_sync" }
 vendetta_media = { path = "crates/vendetta_media" }
 vendetta_render = { path = "crates/vendetta_render" }
 vendetta_verify = { path = "crates/vendetta_verify" }
+vendetta_import = { path = "crates/vendetta_import" }
 
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
@@ -57,3 +59,5 @@ assert_cmd = "2.0"
 predicates = "3.1"
 rpassword = "7.3"
 strum = { version = "0.28", features = ["derive"] }
+scraper = "0.22"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }

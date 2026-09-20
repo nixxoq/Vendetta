@@ -25,6 +25,7 @@ vendetta_sync.workspace = true
 vendetta_media.workspace = true
 vendetta_render.workspace = true
 vendetta_verify.workspace = true
+vendetta_import.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
