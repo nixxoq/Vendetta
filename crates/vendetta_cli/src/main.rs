@@ -425,6 +425,102 @@ pub enum Commands {
         #[arg(long)]
         base_dir: Option<PathBuf>,
     },
+
+    /// Import external chat exports (e.g. Telegram Desktop) into a Vendetta SQLite archive.
+    #[command(name = "import")]
+    Import {
+        #[command(subcommand)]
+        subcommand: ImportSubcommands,
+    },
+
+    /// Convert external chat exports (e.g. Telegram Desktop) directly into a static HTML export.
+    #[command(name = "convert")]
+    Convert {
+        #[command(subcommand)]
+        subcommand: ConvertSubcommands,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ImportSubcommands {
+    /// Import Telegram Desktop export (HTML or JSON) into a fresh native SQLite archive.
+    #[command(name = "tdesktop")]
+    Tdesktop {
+        /// Path to Telegram Desktop export directory or ZIP archive.
+        #[arg(short, long)]
+        source: PathBuf,
+
+        /// Destination path for fresh SQLite archive (fails if file already exists).
+        #[arg(short, long)]
+        archive: PathBuf,
+
+        /// Custom media storage directory (defaults to <archive_parent>/media).
+        #[arg(long)]
+        media_dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ConvertSubcommands {
+    /// Convert Telegram Desktop export (HTML or JSON) directly into a static HTML export.
+    #[command(name = "tdesktop")]
+    Tdesktop {
+        /// Path to Telegram Desktop export directory or ZIP archive.
+        #[arg(short, long)]
+        source: PathBuf,
+
+        /// Output directory for static HTML export.
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Visual presentation mode.
+        #[arg(long, value_enum, default_value_t = CliPresentationMode::TelegramLike)]
+        mode: CliPresentationMode,
+
+        /// Color theme default.
+        #[arg(long, value_enum, default_value_t = CliThemeMode::System)]
+        theme: CliThemeMode,
+
+        /// Message chunk size per HTML page.
+        #[arg(long, default_value_t = 250)]
+        chunk_size: usize,
+
+        /// Overwrite and replace output directory if it already exists.
+        #[arg(long)]
+        replace: bool,
+
+        /// Build client-side search index.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        build_search_index: bool,
+
+        /// Build date jump navigator index.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        build_date_index: bool,
+
+        /// Disable forum and topic-aware rendering, exporting forum supergroups as a flat chronological message stream.
+        #[arg(long, default_value_t = false)]
+        disable_forum_render: bool,
+
+        /// Render export start date (RFC3339 or YYYY-MM-DD).
+        #[arg(long = "from")]
+        from_date: Option<String>,
+
+        /// Render export end date (RFC3339 or YYYY-MM-DD).
+        #[arg(long = "to")]
+        to_date: Option<String>,
+
+        /// Use sanitized human-readable chat directory names instead of peer ID tokens.
+        #[arg(long = "readable-names", default_value_t = false)]
+        readable_names: bool,
+
+        /// Page splitting strategy (messages or day).
+        #[arg(long = "split-by", value_enum, default_value_t = CliSplitBy::Messages)]
+        split_by: CliSplitBy,
+
+        /// Directory structure for day-based pages (flat or tree).
+        #[arg(long = "date-structure", value_enum, default_value_t = CliDateStructure::Flat)]
+        date_structure: CliDateStructure,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -612,8 +708,13 @@ fn resolve_credentials(
         .filter_map(|candidate| std::fs::read_to_string(candidate).ok())
         .filter_map(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
         .fold((init_id, init_hash), |(curr_id, curr_hash), val| {
-            let id = curr_id.or_else(|| val.get("api_id").and_then(|v| v.as_i64()).map(|v| v as i32));
-            let hash = curr_hash.or_else(|| val.get("api_hash").and_then(|v| v.as_str()).map(ToString::to_string));
+            let id =
+                curr_id.or_else(|| val.get("api_id").and_then(|v| v.as_i64()).map(|v| v as i32));
+            let hash = curr_hash.or_else(|| {
+                val.get("api_hash")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+            });
             (id, hash)
         })
 }
@@ -1243,5 +1344,117 @@ async fn run(cli: Cli) -> Result<i32> {
             }
             Ok(EXIT_SUCCESS)
         }
+
+        Commands::Import { subcommand } => match subcommand {
+            ImportSubcommands::Tdesktop {
+                source,
+                archive,
+                media_dir,
+            } => {
+                let options = vendetta_import::ImportOptions {
+                    source_path: source,
+                    archive_path: archive,
+                    media_dir,
+                };
+                let summary = vendetta_import::import_tdesktop(&options)?;
+                if json {
+                    let out = serde_json::json!({
+                        "schema_version": 1,
+                        "command": "import tdesktop",
+                        "status": "completed",
+                        "archive": summary.archive_path.display().to_string(),
+                        "media_dir": summary.media_dir.display().to_string(),
+                        "chats_count": summary.chats_count,
+                        "messages_count": summary.messages_count,
+                        "media_copied_count": summary.media_copied_count,
+                        "media_skipped_count": summary.media_skipped_count,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&out)?);
+                } else {
+                    println!("==================================================");
+                    println!("TELEGRAM DESKTOP IMPORT COMPLETED");
+                    println!("==================================================");
+                    println!("Archive:           {}", summary.archive_path.display());
+                    println!("Media Dir:         {}", summary.media_dir.display());
+                    println!("Chats Imported:    {}", summary.chats_count);
+                    println!("Messages Imported: {}", summary.messages_count);
+                    println!("Media Copied:      {}", summary.media_copied_count);
+                    println!("Media Skipped:     {}", summary.media_skipped_count);
+                }
+                Ok(EXIT_SUCCESS)
+            }
+        },
+
+        Commands::Convert { subcommand } => match subcommand {
+            ConvertSubcommands::Tdesktop {
+                source,
+                output,
+                mode,
+                theme,
+                chunk_size,
+                replace,
+                build_search_index,
+                build_date_index,
+                disable_forum_render,
+                from_date,
+                to_date,
+                readable_names,
+                split_by,
+                date_structure,
+            } => {
+                let parsed_from = from_date
+                    .as_deref()
+                    .map(|f| vendetta_core::parse_date_bound(f, false).map_err(anyhow::Error::msg))
+                    .transpose()?;
+                let parsed_to = to_date
+                    .as_deref()
+                    .map(|t| vendetta_core::parse_date_bound(t, true).map_err(anyhow::Error::msg))
+                    .transpose()?;
+
+                let options = vendetta_import::ConvertOptions {
+                    source_path: source,
+                    output_dir: output.clone(),
+                    presentation_mode: mode.into(),
+                    theme: theme.into(),
+                    chunk_size,
+                    replace,
+                    split_by: split_by.into(),
+                    date_structure: date_structure.into(),
+                    readable_names,
+                    date_bounds: (parsed_from, parsed_to),
+                    build_search_index,
+                    build_date_index,
+                    disable_forum_render,
+                };
+
+                let summary = vendetta_import::convert_tdesktop(&options)?;
+
+                if json {
+                    let out = serde_json::json!({
+                        "schema_version": 1,
+                        "command": "convert tdesktop",
+                        "status": "completed",
+                        "destination": summary.destination.display().to_string(),
+                        "dialogs_count": summary.dialogs_count,
+                        "messages_count": summary.messages_count,
+                        "chunks_count": summary.chunks_count,
+                        "media_copied_count": summary.media_copied_count,
+                        "manifest_path": summary.manifest_path.display().to_string(),
+                    });
+                    println!("{}", serde_json::to_string_pretty(&out)?);
+                } else {
+                    println!("==================================================");
+                    println!("TELEGRAM DESKTOP DIRECT CONVERSION COMPLETED");
+                    println!("==================================================");
+                    println!("Destination:       {}", summary.destination.display());
+                    println!("Dialogs:           {}", summary.dialogs_count);
+                    println!("Messages:          {}", summary.messages_count);
+                    println!("Chunks:            {}", summary.chunks_count);
+                    println!("Media Copied:      {}", summary.media_copied_count);
+                    println!("Manifest:          {}", summary.manifest_path.display());
+                }
+                Ok(EXIT_SUCCESS)
+            }
+        },
     }
 }
