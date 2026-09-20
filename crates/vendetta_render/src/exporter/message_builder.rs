@@ -26,6 +26,7 @@ where
     pub media_src_dir: Option<&'a Path>,
     pub include_edit_history: bool,
     pub authoritative_name_resolver: F,
+    pub chat_depth: usize,
 }
 
 pub fn build_render_message<F>(
@@ -105,14 +106,19 @@ where
         let target_key = MessageKey::new(target_peer, target_id);
         Some(
             ctx.reply_resolver
-                .resolve_reply(msg.key.peer_id, target_key),
+                .resolve_reply(msg.key, target_key),
         )
     } else {
         None
     };
 
-    let forward_info =
-        resolve_forward_info(ctx.db, msg, ctx.available_avatars, ctx.exported_peer_ids);
+    let forward_info = resolve_forward_info(
+        ctx.db,
+        msg,
+        ctx.available_avatars,
+        ctx.exported_peer_ids,
+        ctx.chat_depth,
+    );
 
     let mut revisions = Vec::new();
     if ctx.include_edit_history {
@@ -166,7 +172,7 @@ where
         let rel_url = m_rec
             .local_rel_path
             .as_deref()
-            .map(|p| ArchiveUrlBuilder::media_url(2, p));
+            .map(|p| ArchiveUrlBuilder::scoped_media_url(ctx.chat_depth, p));
 
         let (is_available, unavailable_reason) = match m_rec.download_status {
             vendetta_model::MediaDownloadStatus::Completed => {
@@ -213,7 +219,13 @@ where
         });
     }
 
-    let reactions = resolve_reactions(ctx.db, msg, ctx.available_avatars, ctx.media_src_dir);
+    let reactions = resolve_reactions(
+        ctx.db,
+        msg,
+        ctx.available_avatars,
+        ctx.media_src_dir,
+        ctx.chat_depth,
+    );
 
     Ok(RenderMessage {
         key: msg.key,
@@ -247,6 +259,7 @@ pub fn resolve_reactions(
     msg: &MessageRecord,
     available_avatars: &HashSet<PeerId>,
     media_src_dir: Option<&Path>,
+    chat_depth: usize,
 ) -> Vec<RenderReactionGroup> {
     let Some(ref raw_json) = msg.reactions_json else {
         return Vec::new();
@@ -283,7 +296,7 @@ pub fn resolve_reactions(
                 let avatar_markup = crate::url_builder::render_avatar_markup(
                     Some(r.peer_id),
                     &name,
-                    2,
+                    chat_depth,
                     false,
                     "avatar-img",
                     available_avatars,
@@ -309,7 +322,8 @@ pub fn resolve_reactions(
                 });
 
                 if exists {
-                    let rel_url = ArchiveUrlBuilder::media_url(2, &asset_path);
+                    let rel_url =
+                        ArchiveUrlBuilder::scoped_reaction_url(chat_depth, document_id);
                     RenderReactionKey::CustomEmoji {
                         document_id,
                         alt_text: None,
@@ -343,6 +357,7 @@ pub fn resolve_forward_info(
     msg: &MessageRecord,
     available_avatars: &HashSet<PeerId>,
     exported_peer_ids: &HashSet<PeerId>,
+    chat_depth: usize,
 ) -> Option<RenderForwardInfo> {
     let mut from_peer: Option<(PeerId, PeerType)> = None;
     let mut saved_from_peer: Option<(PeerId, PeerType)> = None;
@@ -451,7 +466,7 @@ pub fn resolve_forward_info(
         source_avatar_markup = Some(crate::url_builder::render_avatar_markup(
             Some(pid),
             display_name_for_avatar,
-            2,
+            chat_depth,
             false,
             "fwd-avatar",
             available_avatars,
@@ -466,7 +481,7 @@ pub fn resolve_forward_info(
             source_avatar_markup = Some(crate::url_builder::render_avatar_markup(
                 source_peer_id,
                 name,
-                2,
+                chat_depth,
                 false,
                 "fwd-avatar",
                 available_avatars,
@@ -488,7 +503,7 @@ pub fn resolve_forward_info(
             source_avatar_markup = Some(crate::url_builder::render_avatar_markup(
                 Some(pid),
                 &format!("{}", pid.raw()),
-                2,
+                chat_depth,
                 false,
                 "fwd-avatar",
                 available_avatars,

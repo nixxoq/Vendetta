@@ -17,7 +17,8 @@ pub use error::{RenderError, RenderResult};
 pub use exporter::HtmlArchiveExporter;
 pub use manifest::{DatasetFingerprint, HtmlExportManifest};
 pub use model::{
-    ExportOptions, ExportSummary, MediaMode, PresentationMode, RenderMessage, RenderPeer, ThemeMode,
+    DateStructure, ExportOptions, ExportSummary, MediaMode, PresentationMode, RenderMessage,
+    RenderPeer, SplitBy, ThemeMode,
 };
 pub use url_builder::ArchiveUrlBuilder;
 pub use verifier::{HtmlArchiveVerifier, VerificationReport};

@@ -946,7 +946,7 @@ fn full_export_and_verification_run_end_to_end() {
     let verifier = HtmlArchiveVerifier::new(&export_dir);
     let report = verifier.verify().unwrap();
     assert!(report.is_success());
-    assert_eq!(report.total_pages_checked, 4);
+    assert_eq!(report.total_pages_checked, 5);
 }
 
 #[test]
@@ -2312,7 +2312,7 @@ fn real_avatar_renders_with_initials_fallback() {
     let summary = exporter.export().unwrap();
     assert_eq!(summary.messages_count, 3);
 
-    let exported_avatar = export_dir.path().join("export/media/avatars/p_7001.jpg");
+    let exported_avatar = export_dir.path().join("export/chats/p_7001/avatars/p_7001.jpg");
     assert!(exported_avatar.is_file());
     assert_eq!(
         fs::read(&exported_avatar).unwrap(),
@@ -2321,7 +2321,7 @@ fn real_avatar_renders_with_initials_fallback() {
 
     let index_html = fs::read_to_string(export_dir.path().join("export/index.html")).unwrap();
     assert!(index_html.contains(
-        "<img src=\"media/avatars/p_7001.jpg\" alt=\"Alice Group\" class=\"avatar-img\">"
+        "<img src=\"chats/p_7001/avatars/p_7001.jpg\" alt=\"Alice Group\" class=\"avatar-img\">"
     ));
 
     let chat_page = fs::read_to_string(
@@ -2331,7 +2331,7 @@ fn real_avatar_renders_with_initials_fallback() {
     )
     .unwrap();
     assert!(chat_page.contains(
-        "<img src=\"../../media/avatars/p_7001.jpg\" alt=\"Alice Group\" class=\"avatar-img\">"
+        "<img src=\"avatars/p_7001.jpg\" alt=\"Alice Group\" class=\"avatar-img\">"
     ));
     assert!(chat_page.contains("<span class=\"avatar-text\">B</span>"));
 }
@@ -3620,7 +3620,7 @@ fn reactions_and_reactor_list_render_interactively() {
     assert!(m1_section.contains("<span class=\"reaction-count\">1</span>"));
     assert!(m1_section.contains("Nikita"));
     assert!(m1_section.contains("@nikita"));
-    assert!(m1_section.contains("../../media/avatars/p_77001.jpg"));
+    assert!(m1_section.contains("avatars/p_77001.jpg"));
 
     let m2_section = chat_page
         .split("id=\"m-p_66001-102\"")
@@ -3654,7 +3654,7 @@ fn reactions_and_reactor_list_render_interactively() {
     assert!(m3_section.contains("Reactor details unavailable in archive"));
 
     let m4_section = chat_page.split("id=\"m-p_66001-104\"").nth(1).unwrap();
-    assert!(m4_section.contains("../../media/reactions/5256103272296499934.webp"));
+    assert!(m4_section.contains("reactions/5256103272296499934.webp"));
     assert!(m4_section.contains("class=\"reaction-custom-fallback\""));
     assert!(!m4_section.contains("5256103272296499934<"));
     assert!(chat_page.contains("tabindex=\"0\" role=\"button\" aria-haspopup=\"true\""));
@@ -3860,11 +3860,11 @@ fn empty_dialogs_are_filtered_from_export() {
     assert!(!chat_a_page.contains("class=\"dialog-name\">Empty Contact</span>"));
     assert!(!chat_a_page.contains("class=\"dialog-name\">Reactor Nikita</span>"));
     assert!(chat_a_page.contains("Forwarded Source Channel"));
-    assert!(chat_a_page.contains("../../media/avatars/p_4001.jpg"));
+    assert!(chat_a_page.contains("avatars/p_4001.jpg"));
 
     let chat_b_page = fs::read_to_string(out_dir.join("chats/p_1002/page_00001.html")).unwrap();
     assert!(chat_b_page.contains("Reactor Nikita"));
-    assert!(chat_b_page.contains("../../media/avatars/p_5001.jpg"));
+    assert!(chat_b_page.contains("avatars/p_5001.jpg"));
 
     assert!(out_dir.join("chats/p_1001").is_dir());
     assert!(out_dir.join("chats/p_1002").is_dir());
@@ -4454,19 +4454,19 @@ fn test_topic_discovery() {
 
     let peer_dir = tmp_out.path().join("chats/p_neg_999000111");
     assert!(
-        peer_dir.join("topic_1_page_00001.html").exists(),
+        peer_dir.join("topics/1/page_00001.html").exists(),
         "General topic page must exist"
     );
     assert!(
-        peer_dir.join("topic_10_page_00001.html").exists(),
+        peer_dir.join("topics/10/page_00001.html").exists(),
         "Programming topic page must exist"
     );
     assert!(
-        peer_dir.join("topic_20_page_00001.html").exists(),
+        peer_dir.join("topics/20/page_00001.html").exists(),
         "Games topic page must exist"
     );
     assert!(
-        peer_dir.join("topic_30_page_00001.html").exists(),
+        peer_dir.join("topics/30/page_00001.html").exists(),
         "Random topic page must exist"
     );
 }
@@ -4486,7 +4486,7 @@ fn test_topic_message_count() {
     let prog_html = std::fs::read_to_string(
         tmp_out
             .path()
-            .join("chats/p_neg_999000111/topic_10_page_00001.html"),
+            .join("chats/p_neg_999000111/topics/10/page_00001.html"),
     )
     .unwrap();
 
@@ -4523,7 +4523,7 @@ fn test_is_topic_sidebar_renders() {
     let prog_html = std::fs::read_to_string(
         tmp_out
             .path()
-            .join("chats/p_neg_999000111/topic_10_page_00001.html"),
+            .join("chats/p_neg_999000111/topics/10/page_00001.html"),
     )
     .unwrap();
     assert!(
@@ -4553,5 +4553,5 @@ fn test_topic_linking() {
     let shard_file = tmp_out.path().join("search/shards/shard_00001.js");
     assert!(shard_file.exists());
     let shard_content = std::fs::read_to_string(shard_file).unwrap();
-    assert!(shard_content.contains("topic_10_page_00001.html#m-p_neg_999000111-11"));
+    assert!(shard_content.contains("topics/10/page_00001.html#m-p_neg_999000111-11"));
 }

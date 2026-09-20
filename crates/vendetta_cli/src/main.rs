@@ -140,6 +140,14 @@ pub enum Commands {
         /// Maximum number of dialogs to synchronize.
         #[arg(long)]
         limit: Option<usize>,
+
+        /// History backfill start date (RFC3339 or YYYY-MM-DD).
+        #[arg(long = "from")]
+        from_date: Option<String>,
+
+        /// History backfill end date (RFC3339 or YYYY-MM-DD).
+        #[arg(long = "to")]
+        to_date: Option<String>,
     },
 
     /// Download pending media items from Telegram into content-addressable storage.
@@ -264,6 +272,26 @@ pub enum Commands {
         /// Disable forum and topic-aware rendering, exporting forum supergroups as a flat chronological message stream.
         #[arg(long, default_value_t = false)]
         disable_forum_render: bool,
+
+        /// Render export start date (RFC3339 or YYYY-MM-DD).
+        #[arg(long = "from")]
+        from_date: Option<String>,
+
+        /// Render export end date (RFC3339 or YYYY-MM-DD).
+        #[arg(long = "to")]
+        to_date: Option<String>,
+
+        /// Use sanitized human-readable chat directory names instead of peer ID tokens.
+        #[arg(long = "readable-names", default_value_t = false)]
+        readable_names: bool,
+
+        /// Page splitting strategy (messages or day).
+        #[arg(long = "split-by", value_enum, default_value_t = CliSplitBy::Messages)]
+        split_by: CliSplitBy,
+
+        /// Directory structure for day-based pages (flat or tree).
+        #[arg(long = "date-structure", value_enum, default_value_t = CliDateStructure::Flat)]
+        date_structure: CliDateStructure,
     },
 
     /// Verify integrity of a generated static HTML export.
@@ -487,11 +515,47 @@ pub enum CliThemeMode {
 }
 
 impl From<CliThemeMode> for ThemeMode {
-    fn from(t: CliThemeMode) -> Self {
-        match t {
+    fn from(m: CliThemeMode) -> Self {
+        match m {
+            CliThemeMode::System => ThemeMode::System,
             CliThemeMode::Light => ThemeMode::Light,
             CliThemeMode::Dark => ThemeMode::Dark,
-            CliThemeMode::System => ThemeMode::System,
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CliSplitBy {
+    #[value(name = "messages")]
+    #[default]
+    Messages,
+    #[value(name = "day")]
+    Day,
+}
+
+impl From<CliSplitBy> for vendetta_render::SplitBy {
+    fn from(s: CliSplitBy) -> Self {
+        match s {
+            CliSplitBy::Messages => vendetta_render::SplitBy::Messages,
+            CliSplitBy::Day => vendetta_render::SplitBy::Day,
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CliDateStructure {
+    #[value(name = "flat")]
+    #[default]
+    Flat,
+    #[value(name = "tree")]
+    Tree,
+}
+
+impl From<CliDateStructure> for vendetta_render::DateStructure {
+    fn from(s: CliDateStructure) -> Self {
+        match s {
+            CliDateStructure::Flat => vendetta_render::DateStructure::Flat,
+            CliDateStructure::Tree => vendetta_render::DateStructure::Tree,
         }
     }
 }
@@ -537,10 +601,21 @@ fn resolve_credentials(
     api_hash: Option<String>,
     config: &CliConfig,
 ) -> (Option<i32>, Option<String>) {
-    (
-        api_id.or(config.api_id),
-        api_hash.or_else(|| config.api_hash.clone()),
-    )
+    let init_id = api_id.or(config.api_id);
+    let init_hash = api_hash.or_else(|| config.api_hash.clone());
+    if init_id.is_some() && init_hash.is_some() {
+        return (init_id, init_hash);
+    }
+
+    ["session_test.json", "vendetta.json"]
+        .into_iter()
+        .filter_map(|candidate| std::fs::read_to_string(candidate).ok())
+        .filter_map(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .fold((init_id, init_hash), |(curr_id, curr_hash), val| {
+            let id = curr_id.or_else(|| val.get("api_id").and_then(|v| v.as_i64()).map(|v| v as i32));
+            let hash = curr_hash.or_else(|| val.get("api_hash").and_then(|v| v.as_str()).map(ToString::to_string));
+            (id, hash)
+        })
 }
 
 async fn run(cli: Cli) -> Result<i32> {
@@ -629,11 +704,22 @@ async fn run(cli: Cli) -> Result<i32> {
             peer_type,
             exclude_peer_type,
             limit,
+            from_date,
+            to_date,
         } => {
             let eff_archive = config.resolve_archive_path(archive, account);
             let (eff_api_id, eff_api_hash) = resolve_credentials(api_id, api_hash, &config);
             let eff_session = config.resolve_session_path(session, account);
             let target_peers = peers.map(|v| v.into_iter().map(PeerId::new).collect());
+
+            let parsed_from = from_date
+                .as_deref()
+                .map(|f| vendetta_core::parse_date_bound(f, false).map_err(anyhow::Error::msg))
+                .transpose()?;
+            let parsed_to = to_date
+                .as_deref()
+                .map(|t| vendetta_core::parse_date_bound(t, true).map_err(anyhow::Error::msg))
+                .transpose()?;
 
             let summary = sync::run_sync(
                 eff_api_id,
@@ -644,6 +730,7 @@ async fn run(cli: Cli) -> Result<i32> {
                 peer_type.map(Into::into),
                 exclude_peer_type.map(Into::into),
                 limit,
+                (parsed_from, parsed_to),
                 quiet,
                 json,
             )
@@ -739,6 +826,11 @@ async fn run(cli: Cli) -> Result<i32> {
             build_search_index,
             build_date_index,
             disable_forum_render,
+            from_date,
+            to_date,
+            readable_names,
+            split_by,
+            date_structure,
         } => {
             let media_src = media_dir
                 .unwrap_or_else(|| archive.parent().unwrap_or(Path::new(".")).to_path_buf());
@@ -759,7 +851,24 @@ async fn run(cli: Cli) -> Result<i32> {
                 target_peers: None,
             };
 
-            let summary = render::run_export_html(&archive, options, disable_forum_render)?;
+            let parsed_from = from_date
+                .as_deref()
+                .map(|f| vendetta_core::parse_date_bound(f, false).map_err(anyhow::Error::msg))
+                .transpose()?;
+            let parsed_to = to_date
+                .as_deref()
+                .map(|t| vendetta_core::parse_date_bound(t, true).map_err(anyhow::Error::msg))
+                .transpose()?;
+
+            let summary = render::run_export_html(
+                &archive,
+                options,
+                disable_forum_render,
+                readable_names,
+                (parsed_from, parsed_to),
+                split_by.into(),
+                date_structure.into(),
+            )?;
             if json {
                 let out = serde_json::json!({
                     "schema_version": 1,

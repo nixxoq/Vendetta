@@ -40,6 +40,8 @@ pub const THEME_CSS: &str = r##":root,
   --border-reaction-chosen: #2563eb;
   --bg-popover: #ffffff;
   --border-popover: #e4e4e7;
+  --bg-card: #ffffff;
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
 }
 
 [data-theme="dark"] {
@@ -79,6 +81,8 @@ pub const THEME_CSS: &str = r##":root,
   --border-reaction-chosen: #60a5fa;
   --bg-popover: #1f1f23;
   --border-popover: #3f3f46;
+  --bg-card: #1f1f23;
+  --shadow-lg: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -120,6 +124,8 @@ pub const THEME_CSS: &str = r##":root,
     --bg-popover: #1f1f23;
     --border-popover: #3f3f46;
     --bg-quote-fade-out: #2b5278;
+    --bg-card: #1f1f23;
+    --shadow-lg: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
   }
 }
 "##;
@@ -414,6 +420,8 @@ a:hover {
   min-width: 180px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
+  background: var(--bg-card, var(--bg-popover, #ffffff));
+  border: 1px solid var(--border-popover, var(--border-color));
   border-radius: 10px;
   box-shadow: var(--shadow-lg);
   padding: 0.375rem;
@@ -536,6 +544,8 @@ a:hover {
   overflow-y: auto;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
+  background: var(--bg-card, var(--bg-popover, #ffffff));
+  border: 1px solid var(--border-popover, var(--border-color));
   border-radius: 12px;
   box-shadow: var(--shadow-lg);
   padding: 0.875rem 1rem;

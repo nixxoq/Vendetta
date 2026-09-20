@@ -15,7 +15,6 @@ path = "src/lib.rs"
 
 [features]
 default = []
-test-mock = []
 
 [dependencies]
 vendetta_core.workspace = true

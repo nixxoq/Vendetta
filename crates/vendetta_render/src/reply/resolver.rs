@@ -1,14 +1,21 @@
 use std::collections::HashMap;
 
 use grammers_tl_types::Deserializable;
-use vendetta_model::{MediaKind, MessageKey, MessageState, PeerId};
+use vendetta_model::{MediaKind, MessageKey, MessageState};
 use vendetta_storage::ArchiveDb;
 
 use crate::{entity::html_escape, model::RenderReplyPreview, url_builder::ArchiveUrlBuilder};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageLocation {
+    pub page_index: usize,
+    pub topic_id: Option<i32>,
+    pub page_file: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ReplyLocationMap {
-    locations: HashMap<MessageKey, (usize, Option<i32>)>,
+    locations: HashMap<MessageKey, MessageLocation>,
 }
 
 impl ReplyLocationMap {
@@ -19,15 +26,43 @@ impl ReplyLocationMap {
     }
 
     pub fn insert(&mut self, key: MessageKey, page_index: usize, topic_id: Option<i32>) {
-        self.locations.insert(key, (page_index, topic_id));
+        let page_file = ArchiveUrlBuilder::page_file_name(page_index);
+        self.insert_with_file(key, page_index, topic_id, page_file);
+    }
+
+    pub fn insert_with_file(
+        &mut self,
+        key: MessageKey,
+        page_index: usize,
+        topic_id: Option<i32>,
+        page_file: String,
+    ) {
+        self.locations.insert(
+            key,
+            MessageLocation {
+                page_index,
+                topic_id,
+                page_file,
+            },
+        );
     }
 
     pub fn get_location(&self, key: &MessageKey) -> Option<(usize, Option<i32>)> {
-        self.locations.get(key).copied()
+        self.locations
+            .get(key)
+            .map(|loc| (loc.page_index, loc.topic_id))
+    }
+
+    pub fn get_location_full(&self, key: &MessageKey) -> Option<&MessageLocation> {
+        self.locations.get(key)
     }
 
     pub fn get_page(&self, key: &MessageKey) -> Option<usize> {
-        self.locations.get(key).map(|(p, _)| *p)
+        self.locations.get(key).map(|loc| loc.page_index)
+    }
+
+    pub fn get_page_file(&self, key: &MessageKey) -> Option<&str> {
+        self.locations.get(key).map(|loc| loc.page_file.as_str())
     }
 }
 
@@ -112,7 +147,7 @@ impl<'a> ReplyResolver<'a> {
         format!("Chat {}", peer_id.raw())
     }
 
-    pub fn resolve_reply(&self, source_peer: PeerId, target_key: MessageKey) -> RenderReplyPreview {
+    pub fn resolve_reply(&self, source_key: MessageKey, target_key: MessageKey) -> RenderReplyPreview {
         let target_msg_opt = self.db.get_message(target_key).ok().flatten();
 
         let (sender_name, text_snippet, media_indicator, state) =
@@ -166,9 +201,7 @@ impl<'a> ReplyResolver<'a> {
                 {
                     let first_line = t.lines().next().unwrap_or("").trim();
                     let truncated = if first_line.chars().count() > 100 {
-                        let mut s: String = first_line.chars().take(97).collect();
-                        s.push_str("...");
-                        s
+                        first_line.chars().take(97).chain("...".chars()).collect()
                     } else {
                         first_line.to_string()
                     };
@@ -189,35 +222,45 @@ impl<'a> ReplyResolver<'a> {
                 )
             };
 
-        let target_url =
-            self.location_map
-                .get_location(&target_key)
-                .map(|(page_idx, target_topic_id)| {
-                    let anchor = ArchiveUrlBuilder::message_anchor(
-                        target_key.peer_id,
-                        target_key.message_id,
-                    );
-                    if target_key.peer_id == source_peer {
-                        let chunk_file = if let Some(tid) = target_topic_id {
-                            ArchiveUrlBuilder::topic_page_file_name(tid, page_idx)
-                        } else {
-                            ArchiveUrlBuilder::page_file_name(page_idx)
-                        };
-                        format!("{chunk_file}#{anchor}")
+        let target_url = self
+            .location_map
+            .get_location_full(&target_key)
+            .map(|target_loc| {
+                let anchor = ArchiveUrlBuilder::message_anchor(
+                    target_key.peer_id,
+                    target_key.message_id,
+                );
+                let source_loc = self.location_map.get_location_full(&source_key);
+                let source_path = if let Some(sl) = source_loc {
+                    if let Some(tid) = sl.topic_id {
+                        format!("topics/{tid}/{}", sl.page_file)
                     } else {
-                        let target_chunk = if let Some(tid) = target_topic_id {
-                            ArchiveUrlBuilder::topic_chunk_file_rel(
-                                target_key.peer_id,
-                                tid,
-                                page_idx,
-                            )
-                        } else {
-                            ArchiveUrlBuilder::chunk_file_rel(target_key.peer_id, page_idx)
-                        };
-                        let rel = ArchiveUrlBuilder::relative_url(2, &target_chunk);
-                        format!("{rel}#{anchor}")
+                        sl.page_file.clone()
                     }
-                });
+                } else {
+                    "page_00001.html".to_string()
+                };
+
+                let target_path = if let Some(tid) = target_loc.topic_id {
+                    format!("topics/{tid}/{}", target_loc.page_file)
+                } else {
+                    target_loc.page_file.clone()
+                };
+
+                let source_full_rel = format!(
+                    "chats/{}/{}",
+                    ArchiveUrlBuilder::peer_token(source_key.peer_id),
+                    source_path
+                );
+                let target_full_rel = format!(
+                    "chats/{}/{}",
+                    ArchiveUrlBuilder::peer_token(target_key.peer_id),
+                    target_path
+                );
+
+                let rel = ArchiveUrlBuilder::relative_day_to_day(&source_full_rel, &target_full_rel);
+                format!("{rel}#{anchor}")
+            });
 
         RenderReplyPreview {
             target_key,

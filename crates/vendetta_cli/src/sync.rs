@@ -154,6 +154,7 @@ pub async fn run_sync_with_adapter(
     peer_type_filter: Option<PeerType>,
     exclude_peer_type: Option<PeerType>,
     limit: Option<usize>,
+    date_range: (Option<i64>, Option<i64>),
     mut progress: CliProgress,
     json: bool,
 ) -> Result<FullSyncRunSummary> {
@@ -189,14 +190,30 @@ pub async fn run_sync_with_adapter(
     progress.stage("Step 2/4: Initializing coordinated sync pipeline & baseline state S0");
     let pipeline = CoordinatedSyncPipeline::new(Arc::clone(&adapter), Arc::clone(&db));
     let mut sync_tracker = SyncProgressTracker::new(progress.is_quiet(), json);
-
-    progress.stage("Step 3/4: Ingesting message history & reconciling delta stream");
-    let summary = pipeline
-        .run_full_sync_with_scope(&target_peers, is_explicit_scope, |event| {
-            sync_tracker.on_progress(event);
-        })
-        .await
-        .context("Full synchronization pipeline execution failed")?;
+    let is_ranged = date_range.0.is_some() || date_range.1.is_some();
+    let summary = if is_ranged {
+        progress.stage("Step 3/4: Backfilling historical messages for specified date range");
+        pipeline
+            .run_ranged_backfill_with_progress(
+                &target_peers,
+                is_explicit_scope,
+                date_range.0,
+                date_range.1,
+                |event| {
+                    sync_tracker.on_progress(event);
+                },
+            )
+            .await
+            .context("Ranged backfill pipeline execution failed")?
+    } else {
+        progress.stage("Step 3/4: Ingesting message history & reconciling delta stream");
+        pipeline
+            .run_full_sync_with_scope(&target_peers, is_explicit_scope, |event| {
+                sync_tracker.on_progress(event);
+            })
+            .await
+            .context("Full synchronization pipeline execution failed")?
+    };
 
     sync_tracker.finish();
 
@@ -224,6 +241,7 @@ pub async fn run_sync(
     peer_type_filter: Option<PeerType>,
     exclude_peer_type: Option<PeerType>,
     limit: Option<usize>,
+    date_range: (Option<i64>, Option<i64>),
     quiet: bool,
     json: bool,
 ) -> Result<FullSyncRunSummary> {
@@ -239,6 +257,7 @@ pub async fn run_sync(
         peer_type_filter,
         exclude_peer_type,
         limit,
+        date_range,
         progress,
         json,
     )

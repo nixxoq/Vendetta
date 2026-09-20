@@ -27,6 +27,7 @@ pub struct GroupingContext<'a> {
     pub show_sender: bool,
     pub show_avatar: bool,
     pub topic_tag: Option<&'a str>,
+    pub chat_depth: usize,
 }
 
 pub fn render_chat_item(
@@ -129,7 +130,7 @@ fn render_telegram_like(
             let avatar_html = render_avatar_markup(
                 Some(sender_id),
                 sender_name,
-                2,
+                ctx.chat_depth,
                 false,
                 "avatar",
                 available_avatars,
@@ -316,7 +317,7 @@ fn render_album_telegram_like(
             let avatar_html = render_avatar_markup(
                 Some(sender_id),
                 sender_name,
-                2,
+                ctx.chat_depth,
                 false,
                 "avatar",
                 available_avatars,

@@ -42,12 +42,15 @@ pub fn group_messages_into_render_items(
             let cont_prev = i == 0 && continuation_prev_gid == Some(gid);
             let cont_next = last_idx == total && continuation_next_gid == Some(gid);
 
-            if album_msgs.len() == 1
+            let is_single_isolated = album_msgs.len() == 1
                 && !cont_prev
                 && !cont_next
-                && album_msgs[0].media_items.len() <= 1
-            {
-                items.push(RenderItem::Message(Box::new(album_msgs.pop().unwrap())));
+                && album_msgs.first().is_some_and(|m| m.media_items.len() <= 1);
+
+            if is_single_isolated {
+                if let Some(msg) = album_msgs.pop() {
+                    items.push(RenderItem::Message(Box::new(msg)));
+                }
             } else {
                 let album_media = album_msgs
                     .iter()
@@ -124,6 +127,7 @@ pub fn compute_item_grouping_contexts<'a>(
             show_sender: is_first && is_group_chat && !current_msg.is_outgoing && !is_channel,
             show_avatar: is_first && is_group_chat && !current_msg.is_outgoing && !is_channel,
             topic_tag: None,
+            chat_depth: 0,
         });
     }
 
@@ -161,6 +165,7 @@ pub fn compute_grouping_contexts<'a>(
             show_sender: is_first && is_group_chat && !current.is_outgoing && !is_channel,
             show_avatar: is_first && is_group_chat && !current.is_outgoing && !is_channel,
             topic_tag: None,
+            chat_depth: 0,
         });
     }
 

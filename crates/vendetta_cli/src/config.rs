@@ -186,16 +186,30 @@ impl CliConfig {
         cli_session: Option<PathBuf>,
         cli_account: Option<&str>,
     ) -> PathBuf {
+        let account = cli_account.or(self.account.as_deref()).unwrap_or("default");
+        let base = self.base_dir.clone().unwrap_or_else(|| PathBuf::from("."));
+        let app_config = vendetta_core::AppConfig::new(base);
+
         if let Some(s) = cli_session {
+            let is_credentials_file = s.is_file()
+                && std::fs::read_to_string(&s)
+                    .ok()
+                    .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                    .is_some_and(|val| {
+                        val.get("home_dc").is_none()
+                            && (val.get("api_id").is_some() || val.get("api_hash").is_some())
+                    });
+
+            if is_credentials_file {
+                return app_config.session_file(account);
+            }
             return s;
         }
+
         if let Some(ref s) = self.session {
             return s.clone();
         }
-        let account = cli_account.or(self.account.as_deref()).unwrap_or("default");
 
-        let base = self.base_dir.clone().unwrap_or_else(|| PathBuf::from("."));
-        let app_config = vendetta_core::AppConfig::new(base);
         app_config.session_file(account)
     }
 

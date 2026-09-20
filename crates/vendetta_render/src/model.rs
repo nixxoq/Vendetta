@@ -102,6 +102,62 @@ impl ThemeMode {
     }
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Default,
+    Display,
+    EnumString,
+    AsRefStr,
+    VariantArray,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
+pub enum SplitBy {
+    #[default]
+    Messages,
+    Day,
+}
+
+impl SplitBy {
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Default,
+    Display,
+    EnumString,
+    AsRefStr,
+    VariantArray,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
+pub enum DateStructure {
+    #[default]
+    Flat,
+    Tree,
+}
+
+impl DateStructure {
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportOptions {
     pub output_dir: PathBuf,

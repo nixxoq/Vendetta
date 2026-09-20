@@ -24,6 +24,7 @@ pub struct SearchIndexer<'a> {
     db: &'a ArchiveDb,
     location_map: &'a ReplyLocationMap,
     entries_per_shard: usize,
+    peer_dirs: Option<&'a HashMap<PeerId, String>>,
 }
 
 impl<'a> SearchIndexer<'a> {
@@ -32,11 +33,17 @@ impl<'a> SearchIndexer<'a> {
             db,
             location_map,
             entries_per_shard: 2500,
+            peer_dirs: None,
         }
     }
 
     pub fn with_entries_per_shard(mut self, count: usize) -> Self {
         self.entries_per_shard = count.max(1);
+        self
+    }
+
+    pub fn with_peer_dirs(mut self, peer_dirs: &'a HashMap<PeerId, String>) -> Self {
+        self.peer_dirs = Some(peer_dirs);
         self
     }
 
@@ -96,7 +103,17 @@ impl<'a> SearchIndexer<'a> {
                         .unwrap_or((0, None));
                     let anchor =
                         ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id);
-                    let target_chunk = if let Some(tid) = target_topic_id {
+                    let target_chunk = if let Some(peer_dirs) = self.peer_dirs {
+                        let default_dir =
+                            format!("p_{}", ArchiveUrlBuilder::peer_token(msg.key.peer_id));
+                        let chat_dir = peer_dirs.get(&msg.key.peer_id).unwrap_or(&default_dir);
+                        let page_file = ArchiveUrlBuilder::page_file_name(page_idx);
+                        if let Some(tid) = target_topic_id {
+                            format!("chats/{chat_dir}/topics/{tid}/{page_file}")
+                        } else {
+                            format!("chats/{chat_dir}/{page_file}")
+                        }
+                    } else if let Some(tid) = target_topic_id {
                         ArchiveUrlBuilder::topic_chunk_file_rel(msg.key.peer_id, tid, page_idx)
                     } else {
                         ArchiveUrlBuilder::chunk_file_rel(msg.key.peer_id, page_idx)
