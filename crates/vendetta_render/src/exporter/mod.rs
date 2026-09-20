@@ -23,9 +23,7 @@ use crate::{
         DatasetFingerprint, HtmlExportManifest, ManifestChatEntry, compute_chat_fingerprint,
         compute_export_config_fingerprint_full,
     },
-    model::{
-        DateStructure, ExportOptions, ExportSummary, RenderMessage, RenderPeer, SplitBy,
-    },
+    model::{DateStructure, ExportOptions, ExportSummary, RenderMessage, RenderPeer, SplitBy},
     navigation::DateNavigator,
     reply::{ReplyLocationMap, ReplyResolver},
     search::SearchIndexer,
@@ -93,7 +91,11 @@ fn scan_available_avatars(
 fn extract_message_scope_metadata(
     msgs: &[MessageRecord],
     current_peer_id: PeerId,
-) -> (Vec<vendetta_model::MessageId>, HashSet<PeerId>, HashSet<i64>) {
+) -> (
+    Vec<vendetta_model::MessageId>,
+    HashSet<PeerId>,
+    HashSet<i64>,
+) {
     let mut msg_ids = Vec::with_capacity(msgs.len());
     let mut participants = HashSet::new();
     participants.insert(current_peer_id);
@@ -391,12 +393,8 @@ impl<'a> HtmlArchiveExporter<'a> {
                 if self.split_by == crate::model::SplitBy::Day {
                     let day_groups = pages::group_records_by_day(&in_range_msgs);
                     for (day_idx, ((y, m, d), day_msgs)) in day_groups.iter().enumerate() {
-                        let day_file = ArchiveUrlBuilder::day_page_file_name(
-                            *y,
-                            *m,
-                            *d,
-                            self.date_structure,
-                        );
+                        let day_file =
+                            ArchiveUrlBuilder::day_page_file_name(*y, *m, *d, self.date_structure);
                         for msg in day_msgs {
                             location_map.insert_with_file(msg.key, day_idx, None, day_file.clone());
                         }
@@ -469,17 +467,18 @@ impl<'a> HtmlArchiveExporter<'a> {
             None
         };
 
-        let can_incremental = prev_manifest.as_ref().is_some_and(|prev| {
-            prev.export_format == "chat-portable-v1"
-                && prev.renderer_version == "vendetta_render_v2"
-                && prev.export_config_fingerprint == config_fingerprint
-                && prev.from_date == self.date_range.0
-                && prev.to_date == self.date_range.1
-                && prev.readable_names == self.readable_names
-                && prev.presentation_mode == self.options.presentation_mode.to_string()
-                && prev.media_mode == self.options.media_mode.to_string()
-                && prev.chunk_size == self.options.chunk_size
-        });
+        let can_incremental = !self.options.replace
+            && prev_manifest.as_ref().is_some_and(|prev| {
+                prev.export_format == "chat-portable-v1"
+                    && prev.renderer_version == "vendetta_render_v3"
+                    && prev.export_config_fingerprint == config_fingerprint
+                    && prev.from_date == self.date_range.0
+                    && prev.to_date == self.date_range.1
+                    && prev.readable_names == self.readable_names
+                    && prev.presentation_mode == self.options.presentation_mode.to_string()
+                    && prev.media_mode == self.options.media_mode.to_string()
+                    && prev.chunk_size == self.options.chunk_size
+            });
 
         let prev_chats_by_peer: HashMap<i64, &ManifestChatEntry> = if can_incremental {
             prev_manifest
@@ -525,7 +524,10 @@ impl<'a> HtmlArchiveExporter<'a> {
                         .avatar_files
                         .iter()
                         .filter_map(|av| {
-                            let stem = av.strip_suffix(".jpg").or_else(|| av.strip_suffix(".png")).unwrap_or(av);
+                            let stem = av
+                                .strip_suffix(".jpg")
+                                .or_else(|| av.strip_suffix(".png"))
+                                .unwrap_or(av);
                             parse_avatar_stem(stem)
                         })
                         .for_each(|pid| {
@@ -598,7 +600,10 @@ impl<'a> HtmlArchiveExporter<'a> {
                 .avatar_files
                 .iter()
                 .filter_map(|av| {
-                    let stem = av.strip_suffix(".jpg").or_else(|| av.strip_suffix(".png")).unwrap_or(av);
+                    let stem = av
+                        .strip_suffix(".jpg")
+                        .or_else(|| av.strip_suffix(".png"))
+                        .unwrap_or(av);
                     parse_avatar_stem(stem)
                 })
                 .for_each(|pid| {
@@ -778,17 +783,25 @@ impl<'a> HtmlArchiveExporter<'a> {
                             .collect();
                         let day_groups = pages::group_messages_by_day(&t_msgs);
                         for ((y, m, d), day_msgs) in day_groups {
-                            let file_rel = ArchiveUrlBuilder::day_page_file_name(y, m, d, self.date_structure);
+                            let file_rel =
+                                ArchiveUrlBuilder::day_page_file_name(y, m, d, self.date_structure);
                             let day_path = format!("topics/{}/{}", topic.topic_id, file_rel);
-                            let fp = crate::manifest::compute_day_fingerprint(&day_msgs, &config_fingerprint);
+                            let fp = crate::manifest::compute_day_fingerprint(
+                                &day_msgs,
+                                &config_fingerprint,
+                            );
                             day_fingerprints.insert(day_path, fp);
                         }
                     }
                 } else {
                     let day_groups = pages::group_messages_by_day(&all_render_messages);
                     for ((y, m, d), day_msgs) in day_groups {
-                        let file_rel = ArchiveUrlBuilder::day_page_file_name(y, m, d, self.date_structure);
-                        let fp = crate::manifest::compute_day_fingerprint(&day_msgs, &config_fingerprint);
+                        let file_rel =
+                            ArchiveUrlBuilder::day_page_file_name(y, m, d, self.date_structure);
+                        let fp = crate::manifest::compute_day_fingerprint(
+                            &day_msgs,
+                            &config_fingerprint,
+                        );
                         day_fingerprints.insert(file_rel, fp);
                     }
                 }
@@ -827,7 +840,7 @@ impl<'a> HtmlArchiveExporter<'a> {
         let manifest = HtmlExportManifest {
             format_version: 2,
             export_format: "chat-portable-v1".to_string(),
-            renderer_version: "vendetta_render_v2".to_string(),
+            renderer_version: "vendetta_render_v3".to_string(),
             readable_names: self.readable_names,
             from_date: self.date_range.0,
             to_date: self.date_range.1,
@@ -901,7 +914,10 @@ impl<'a> HtmlArchiveExporter<'a> {
         Ok(format!("Chat {}", peer_id.raw()))
     }
 
-    pub fn export_incremental_with_progress<F>(&self, _on_progress: &mut F) -> RenderResult<ExportSummary>
+    pub fn export_incremental_with_progress<F>(
+        &self,
+        _on_progress: &mut F,
+    ) -> RenderResult<ExportSummary>
     where
         F: FnMut(&str, usize, usize),
     {
@@ -1011,12 +1027,8 @@ impl<'a> HtmlArchiveExporter<'a> {
             } else {
                 let day_groups = pages::group_records_by_day(&in_range_msgs);
                 for (day_idx, ((y, m, d), day_msgs)) in day_groups.iter().enumerate() {
-                    let day_file = ArchiveUrlBuilder::day_page_file_name(
-                        *y,
-                        *m,
-                        *d,
-                        self.date_structure,
-                    );
+                    let day_file =
+                        ArchiveUrlBuilder::day_page_file_name(*y, *m, *d, self.date_structure);
                     for msg in day_msgs {
                         location_map.insert_with_file(msg.key, day_idx, None, day_file.clone());
                     }
@@ -1053,13 +1065,10 @@ impl<'a> HtmlArchiveExporter<'a> {
         let chats_dir = target_dir.join("chats");
         fs::create_dir_all(&chats_dir)?;
 
-        let mut available_avatars = scan_available_avatars(
-            self.options.media_src_dir.as_deref(),
-            &[target_dir],
-        );
+        let mut available_avatars =
+            scan_available_avatars(self.options.media_src_dir.as_deref(), &[target_dir]);
 
-        let exported_peer_ids: HashSet<PeerId> =
-            render_peers.iter().map(|p| p.peer_id).collect();
+        let exported_peer_ids: HashSet<PeerId> = render_peers.iter().map(|p| p.peer_id).collect();
         let config_fingerprint = compute_export_config_fingerprint_full(
             &self.options,
             self.readable_names,
@@ -1133,7 +1142,10 @@ impl<'a> HtmlArchiveExporter<'a> {
                 .avatar_files
                 .iter()
                 .filter_map(|av| {
-                    let stem = av.strip_suffix(".jpg").or_else(|| av.strip_suffix(".png")).unwrap_or(av);
+                    let stem = av
+                        .strip_suffix(".jpg")
+                        .or_else(|| av.strip_suffix(".png"))
+                        .unwrap_or(av);
                     parse_avatar_stem(stem)
                 })
                 .for_each(|pid| {
@@ -1190,7 +1202,9 @@ impl<'a> HtmlArchiveExporter<'a> {
 
             if current_peer.is_forum && !current_peer.topics.is_empty() {
                 for topic in &current_peer.topics {
-                    let topic_dir = peer_chat_dir.join("topics").join(topic.topic_id.to_string());
+                    let topic_dir = peer_chat_dir
+                        .join("topics")
+                        .join(topic.topic_id.to_string());
                     fs::create_dir_all(&topic_dir)?;
 
                     let topic_msgs: Vec<RenderMessage> = all_render_messages
@@ -1211,15 +1225,23 @@ impl<'a> HtmlArchiveExporter<'a> {
                         let day_file_names: Vec<String> = day_groups
                             .iter()
                             .map(|((y, m, d), _)| {
-                                ArchiveUrlBuilder::day_page_file_name(*y, *m, *d, self.date_structure)
+                                ArchiveUrlBuilder::day_page_file_name(
+                                    *y,
+                                    *m,
+                                    *d,
+                                    self.date_structure,
+                                )
                             })
                             .collect();
 
                         let mut date_navigator = DateNavigator::new();
                         if self.options.build_date_index {
-                            for (((_y, _m, _d), msgs), file_name) in day_groups.iter().zip(&day_file_names) {
+                            for (((_y, _m, _d), msgs), file_name) in
+                                day_groups.iter().zip(&day_file_names)
+                            {
                                 if let Some(first_msg) = msgs.first() {
-                                    date_navigator.record_message_target(first_msg.date, file_name.clone());
+                                    date_navigator
+                                        .record_message_target(first_msg.date, file_name.clone());
                                 }
                             }
                         }
@@ -1229,7 +1251,10 @@ impl<'a> HtmlArchiveExporter<'a> {
                         {
                             let day_path = format!("topics/{}/{}", topic.topic_id, file_rel);
                             let target_file = topic_dir.join(file_rel);
-                            let day_fp = crate::manifest::compute_day_fingerprint(day_msgs, &config_fingerprint);
+                            let day_fp = crate::manifest::compute_day_fingerprint(
+                                day_msgs,
+                                &config_fingerprint,
+                            );
 
                             let is_unchanged = old_entry
                                 .and_then(|e| e.day_fingerprints.get(&day_path))
@@ -1259,8 +1284,12 @@ impl<'a> HtmlArchiveExporter<'a> {
                                     Some(&chat_dirs),
                                 );
 
-                                let file_name = target_file.file_name().and_then(|n| n.to_str()).unwrap_or("day.html");
-                                let tmp_path = target_file.with_file_name(format!("{file_name}.tmp-{run_id}"));
+                                let file_name = target_file
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("day.html");
+                                let tmp_path =
+                                    target_file.with_file_name(format!("{file_name}.tmp-{run_id}"));
                                 if let Some(parent) = tmp_path.parent() {
                                     fs::create_dir_all(parent)?;
                                 }
@@ -1313,7 +1342,8 @@ impl<'a> HtmlArchiveExporter<'a> {
 
                 let mut date_navigator = DateNavigator::new();
                 if self.options.build_date_index {
-                    for (((_y, _m, _d), msgs), file_name) in day_groups.iter().zip(&day_file_names) {
+                    for (((_y, _m, _d), msgs), file_name) in day_groups.iter().zip(&day_file_names)
+                    {
                         if let Some(first_msg) = msgs.first() {
                             date_navigator.record_message_target(first_msg.date, file_name.clone());
                         }
@@ -1324,7 +1354,8 @@ impl<'a> HtmlArchiveExporter<'a> {
                     day_groups.iter().zip(&day_file_names).enumerate()
                 {
                     let target_file = peer_chat_dir.join(file_rel);
-                    let day_fp = crate::manifest::compute_day_fingerprint(day_msgs, &config_fingerprint);
+                    let day_fp =
+                        crate::manifest::compute_day_fingerprint(day_msgs, &config_fingerprint);
 
                     let is_unchanged = old_entry
                         .and_then(|e| e.day_fingerprints.get(file_rel))
@@ -1354,8 +1385,12 @@ impl<'a> HtmlArchiveExporter<'a> {
                             Some(&chat_dirs),
                         );
 
-                        let file_name = target_file.file_name().and_then(|n| n.to_str()).unwrap_or("day.html");
-                        let tmp_path = target_file.with_file_name(format!("{file_name}.tmp-{run_id}"));
+                        let file_name = target_file
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("day.html");
+                        let tmp_path =
+                            target_file.with_file_name(format!("{file_name}.tmp-{run_id}"));
                         if let Some(parent) = tmp_path.parent() {
                             fs::create_dir_all(parent)?;
                         }
@@ -1502,7 +1537,7 @@ impl<'a> HtmlArchiveExporter<'a> {
         let manifest = HtmlExportManifest {
             format_version: 2,
             export_format: "chat-portable-v1".to_string(),
-            renderer_version: "vendetta_render_v2".to_string(),
+            renderer_version: "vendetta_render_v3".to_string(),
             readable_names: self.readable_names,
             from_date: self.date_range.0,
             to_date: self.date_range.1,
@@ -1595,4 +1630,3 @@ pub fn resolve_chat_directories(
         })
         .collect()
 }
-

@@ -26,7 +26,16 @@ pub fn render_media_card(item: &RenderMediaItem) -> String {
 </div>
 "##
         ),
-        MediaKind::Video | MediaKind::VideoNote | MediaKind::Animation => format!(
+        MediaKind::Animation => format!(
+            r##"<div class="media-card media-video media-animation">
+  <video autoplay loop muted playsinline preload="metadata" class="video-player">
+    <source src="{safe_url}">
+    <a href="{safe_url}" download>Download animation</a>
+  </video>
+</div>
+"##
+        ),
+        MediaKind::Video | MediaKind::VideoNote => format!(
             r##"<div class="media-card media-video">
   <video controls preload="metadata" class="video-player">
     <source src="{safe_url}">

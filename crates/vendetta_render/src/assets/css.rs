@@ -656,6 +656,84 @@ a:hover {
   border-radius: 8px;
 }
 
+/* Service Card (e.g. Suggested Profile Photo) */
+.system-event-card {
+  margin: 0.75rem auto;
+  max-width: 360px;
+}
+
+.service-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 1rem 1.25rem;
+  box-shadow: var(--shadow-sm);
+  margin: 0 auto;
+}
+
+.service-card-avatar-wrap {
+  display: block;
+  margin-bottom: 0.75rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.service-card-avatar-wrap:hover {
+  transform: scale(1.03);
+}
+
+.service-card-avatar {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  box-shadow: var(--shadow-sm);
+  border: 2px solid var(--bg-primary);
+}
+
+.service-card-text {
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--text-primary);
+  margin-bottom: 0.875rem;
+  word-break: break-word;
+}
+
+.service-card-actions {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 0.375rem;
+}
+
+.service-card-btn {
+  display: inline-block;
+  padding: 0.375rem 1rem;
+  border-radius: 14px;
+  background: var(--accent-color);
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.service-card-btn:hover {
+  background: var(--accent-hover);
+  color: #ffffff;
+}
+
+.service-card-meta {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
 /* Pagination Footer */
 .pagination-footer {
   background: var(--bg-primary);

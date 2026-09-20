@@ -8,9 +8,11 @@ use vendetta_model::{MessageRecord, PeerId};
 
 use crate::{
     error::RenderResult,
-    layout::dialog::{render_dialog_page, DialogPageContext},
+    layout::dialog::{DialogPageContext, render_dialog_page_with_state},
     message::{edits::days_to_ymd, group_messages_into_render_items},
-    model::{DateStructure, ExportOptions, RenderItem, RenderMessage, RenderPeer, RenderTopic, SplitBy},
+    model::{
+        DateStructure, ExportOptions, RenderItem, RenderMessage, RenderPeer, RenderTopic, SplitBy,
+    },
     navigation::DateNavigator,
     reply::ReplyLocationMap,
     url_builder::ArchiveUrlBuilder,
@@ -63,13 +65,54 @@ pub fn render_single_day_dialog_page(
     date_navigator: Option<&DateNavigator>,
     chat_dirs: Option<&HashMap<PeerId, String>>,
 ) -> String {
+    render_single_day_dialog_page_with_state(
+        current_peer,
+        render_peers,
+        current_topic,
+        topics,
+        day_msgs,
+        day_idx,
+        total_days,
+        file_rel,
+        day_file_names,
+        options,
+        date_structure,
+        available_avatars,
+        date_navigator,
+        chat_dirs,
+        None,
+    )
+    .0
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn render_single_day_dialog_page_with_state(
+    current_peer: &RenderPeer,
+    render_peers: &[RenderPeer],
+    current_topic: Option<&RenderTopic>,
+    topics: &[RenderTopic],
+    day_msgs: &[RenderMessage],
+    day_idx: usize,
+    total_days: usize,
+    file_rel: &str,
+    day_file_names: &[String],
+    options: &ExportOptions,
+    date_structure: DateStructure,
+    available_avatars: &HashSet<PeerId>,
+    date_navigator: Option<&DateNavigator>,
+    chat_dirs: Option<&HashMap<PeerId, String>>,
+    initial_sender: Option<crate::message::ActualSender>,
+) -> (String, Option<crate::message::ActualSender>) {
     let (y, m, d) = day_msgs
         .first()
         .map(|msg| days_to_ymd(msg.date / 86400))
         .unwrap_or((1970, 1, 1));
     let render_items = group_messages_into_render_items(day_msgs.to_vec(), None, None);
-    let custom_page_indicator =
-        format!("{y:04}-{m:02}-{d:02} (Day {} of {})", day_idx + 1, total_days);
+    let custom_page_indicator = format!(
+        "{y:04}-{m:02}-{d:02} (Day {} of {})",
+        day_idx + 1,
+        total_days
+    );
     let custom_prev_url = day_idx
         .checked_sub(1)
         .and_then(|prev_idx| day_file_names.get(prev_idx))
@@ -106,9 +149,10 @@ pub fn render_single_day_dialog_page(
         custom_next_url,
         custom_page_indicator: Some(custom_page_indicator),
         chat_dirs,
+        initial_sender,
     };
 
-    render_dialog_page(&page_ctx)
+    render_dialog_page_with_state(&page_ctx)
 }
 
 fn build_date_navigator(msgs: &[RenderMessage], chunk_size: usize, enabled: bool) -> DateNavigator {
@@ -169,7 +213,9 @@ pub fn render_topic_scoped_pages(
     let mut created_pages = Vec::new();
 
     for topic in &current_peer.topics {
-        let topic_dir = peer_chat_dir.join("topics").join(topic.topic_id.to_string());
+        let topic_dir = peer_chat_dir
+            .join("topics")
+            .join(topic.topic_id.to_string());
         fs::create_dir_all(&topic_dir)?;
 
         let topic_msgs: Vec<RenderMessage> = all_render_messages
@@ -203,10 +249,11 @@ pub fn render_topic_scoped_pages(
                 }
             }
 
+            let mut running_actual_sender: Option<crate::message::ActualSender> = None;
             for (day_idx, (((_y, _m, _d), day_msgs), file_rel)) in
                 day_groups.iter().zip(&day_file_names).enumerate()
             {
-                let page_html = render_single_day_dialog_page(
+                let (page_html, next_sender) = render_single_day_dialog_page_with_state(
                     current_peer,
                     render_peers,
                     Some(topic),
@@ -221,7 +268,9 @@ pub fn render_topic_scoped_pages(
                     available_avatars,
                     Some(&date_navigator),
                     chat_dirs,
+                    running_actual_sender,
                 );
+                running_actual_sender = next_sender;
 
                 let out_path = topic_dir.join(file_rel);
                 if let Some(parent) = out_path.parent() {
@@ -251,6 +300,7 @@ pub fn render_topic_scoped_pages(
         let date_navigator =
             build_date_navigator(&topic_msgs, options.chunk_size, options.build_date_index);
 
+        let mut running_actual_sender: Option<crate::message::ActualSender> = None;
         for page_idx in 0..total_pages {
             let chunk_start = page_idx * options.chunk_size;
             let chunk_end = (chunk_start + options.chunk_size).min(topic_msgs.len());
@@ -260,19 +310,11 @@ pub fn render_topic_scoped_pages(
                 &[]
             };
 
-            let (cont_prev_gid, cont_next_gid) = chunk_continuation_gids(
-                &topic_msgs,
-                chunk_start,
-                chunk_end,
-                page_idx,
-                total_pages,
-            );
+            let (cont_prev_gid, cont_next_gid) =
+                chunk_continuation_gids(&topic_msgs, chunk_start, chunk_end, page_idx, total_pages);
 
-            let render_items = group_messages_into_render_items(
-                raw_chunk.to_vec(),
-                cont_prev_gid,
-                cont_next_gid,
-            );
+            let render_items =
+                group_messages_into_render_items(raw_chunk.to_vec(), cont_prev_gid, cont_next_gid);
 
             let date_nav_html = if options.build_date_index {
                 Some(date_navigator.render_date_jump_menu(
@@ -303,9 +345,11 @@ pub fn render_topic_scoped_pages(
                 custom_next_url: None,
                 custom_page_indicator: None,
                 chat_dirs,
+                initial_sender: running_actual_sender.clone(),
             };
 
-            let page_html = render_dialog_page(&page_ctx);
+            let (page_html, next_sender) = render_dialog_page_with_state(&page_ctx);
+            running_actual_sender = next_sender;
             let page_file_name = ArchiveUrlBuilder::page_file_name(page_idx);
             fs::write(topic_dir.join(&page_file_name), page_html)?;
             created_pages.push(format!("topics/{}/{}", topic.topic_id, page_file_name));
@@ -343,6 +387,7 @@ pub fn render_unified_messages_pages(
         options.build_date_index,
     );
 
+    let mut running_actual_sender: Option<crate::message::ActualSender> = None;
     for page_idx in 0..total_u_pages {
         let chunk_start = page_idx * options.chunk_size;
         let chunk_end = (chunk_start + options.chunk_size).min(all_render_messages.len());
@@ -403,10 +448,12 @@ pub fn render_unified_messages_pages(
             custom_next_url: None,
             custom_page_indicator: None,
             chat_dirs,
+            initial_sender: running_actual_sender.clone(),
         };
 
-        let page_html = render_dialog_page(&page_ctx);
-        let page_file_name = ArchiveUrlBuilder::page_file_name(page_idx);
+        let (page_html, next_sender) = render_dialog_page_with_state(&page_ctx);
+        running_actual_sender = next_sender;
+        let page_file_name = ArchiveUrlBuilder::unified_messages_page_file_name(page_idx);
         fs::write(messages_dir.join(&page_file_name), page_html)?;
         created_pages.push(format!("topics/messages/{page_file_name}"));
     }
@@ -433,9 +480,7 @@ pub fn render_flat_dialog_pages(
         let total_days = day_groups.len();
         let day_file_names: Vec<String> = day_groups
             .iter()
-            .map(|((y, m, d), _)| {
-                ArchiveUrlBuilder::day_page_file_name(*y, *m, *d, date_structure)
-            })
+            .map(|((y, m, d), _)| ArchiveUrlBuilder::day_page_file_name(*y, *m, *d, date_structure))
             .collect();
 
         let mut date_navigator = DateNavigator::new();
@@ -447,10 +492,11 @@ pub fn render_flat_dialog_pages(
             }
         }
 
+        let mut running_actual_sender: Option<crate::message::ActualSender> = None;
         for (day_idx, (((_y, _m, _d), day_msgs), file_rel)) in
             day_groups.iter().zip(&day_file_names).enumerate()
         {
-            let page_html = render_single_day_dialog_page(
+            let (page_html, next_sender) = render_single_day_dialog_page_with_state(
                 current_peer,
                 render_peers,
                 None,
@@ -465,7 +511,9 @@ pub fn render_flat_dialog_pages(
                 available_avatars,
                 Some(&date_navigator),
                 chat_dirs,
+                running_actual_sender,
             );
+            running_actual_sender = next_sender;
 
             let out_path = peer_chat_dir.join(file_rel);
             if let Some(parent) = out_path.parent() {
@@ -493,9 +541,13 @@ pub fn render_flat_dialog_pages(
         total_msgs.div_ceil(options.chunk_size)
     };
 
-    let date_navigator =
-        build_date_navigator(all_render_messages, options.chunk_size, options.build_date_index);
+    let date_navigator = build_date_navigator(
+        all_render_messages,
+        options.chunk_size,
+        options.build_date_index,
+    );
 
+    let mut running_actual_sender: Option<crate::message::ActualSender> = None;
     for page_idx in 0..total_pages {
         let chunk_start = page_idx * options.chunk_size;
         let chunk_end = (chunk_start + options.chunk_size).min(all_render_messages.len());
@@ -541,9 +593,11 @@ pub fn render_flat_dialog_pages(
             custom_next_url: None,
             custom_page_indicator: None,
             chat_dirs,
+            initial_sender: running_actual_sender.clone(),
         };
 
-        let page_html = render_dialog_page(&page_ctx);
+        let (page_html, next_sender) = render_dialog_page_with_state(&page_ctx);
+        running_actual_sender = next_sender;
         let page_file_name = ArchiveUrlBuilder::page_file_name(page_idx);
         fs::write(peer_chat_dir.join(&page_file_name), page_html)?;
         created_pages.push(page_file_name);
@@ -573,5 +627,8 @@ pub fn write_root_topic_redirect(
     );
     fs::write(peer_chat_dir.join("index.html"), &redirect_html)?;
     fs::write(peer_chat_dir.join("page_00001.html"), &redirect_html)?;
-    Ok(vec!["index.html".to_string(), "page_00001.html".to_string()])
+    Ok(vec![
+        "index.html".to_string(),
+        "page_00001.html".to_string(),
+    ])
 }

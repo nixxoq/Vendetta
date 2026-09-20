@@ -6,7 +6,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{sync::Semaphore, time::sleep};
+use tokio::{sync::Semaphore, task::JoinSet, time::sleep};
 use tracing::{debug, error, info, warn};
 use vendetta_core::now_unix_secs;
 use vendetta_model::MediaDownloadStatus;
@@ -55,6 +55,14 @@ impl DynamicConcurrencyController {
 
     pub fn max_dc_concurrency(&self) -> usize {
         self.max_dc_concurrency
+    }
+
+    pub fn max_concurrency(&self) -> usize {
+        self.max_concurrency
+    }
+
+    pub fn min_concurrency(&self) -> usize {
+        self.min_concurrency
     }
 
     pub fn get_dc_semaphore(&self, dc_id: i32) -> Arc<Semaphore> {
@@ -192,31 +200,36 @@ impl MediaScheduler {
             Arc::clone(&self.adapter),
         ));
 
-        loop {
-            let concurrency = self.controller.current_concurrency();
-            let now = now_unix_secs();
+        let max_concurrency = self.controller.max_concurrency();
+        let mut available_workers: Vec<usize> = (0..max_concurrency).rev().collect();
+        let mut next_worker_fallback = max_concurrency;
+        let mut tasks = JoinSet::new();
 
-            let mut claimed = Vec::new();
-            for i in 0..concurrency {
-                let worker_id = format!("{}_{}", worker_id_prefix, i);
-                match self.db.claim_next_pending_media(&worker_id) {
-                    Ok(Some(item)) => claimed.push(item),
-                    Ok(None) => break,
-                    Err(e) => {
-                        error!("Failed to claim pending media from DB: {e}");
+        loop {
+            let target_concurrency = self.controller.current_concurrency();
+
+            while tasks.len() < target_concurrency {
+                let worker_idx = available_workers.pop().unwrap_or_else(|| {
+                    let idx = next_worker_fallback;
+                    next_worker_fallback += 1;
+                    idx
+                });
+                let worker_id = format!("{worker_id_prefix}_{worker_idx}");
+
+                let record = match self.db.claim_next_pending_media(&worker_id) {
+                    Ok(Some(item)) => item,
+                    Ok(None) => {
+                        available_workers.push(worker_idx);
                         break;
                     }
-                }
-            }
+                    Err(e) => {
+                        error!("Failed to claim pending media from DB: {e}");
+                        available_workers.push(worker_idx);
+                        break;
+                    }
+                };
 
-            if claimed.is_empty() {
-                debug!("No eligible media items to download. Scheduler cycle complete.");
-                break;
-            }
-
-            let mut tasks = Vec::new();
-
-            for mut record in claimed {
+                let now = now_unix_secs();
                 if self.controller.is_dc_in_cooldown(record.dc_id) {
                     debug!(
                         "DC {} is in cooldown; setting RetryWait for {}",
@@ -229,6 +242,9 @@ impl MediaScheduler {
                         Some(now + 5),
                     );
                     summary.retry_wait_count += 1;
+                    progress_event.retry_wait_count += 1;
+                    progress(&progress_event);
+                    available_workers.push(worker_idx);
                     continue;
                 }
 
@@ -240,157 +256,175 @@ impl MediaScheduler {
                 let worker_id_str = record
                     .worker_id
                     .clone()
-                    .unwrap_or_else(|| format!("{worker_id_prefix}_worker"));
+                    .unwrap_or_else(|| worker_id.clone());
 
-                tasks.push(tokio::spawn(async move {
+                tasks.spawn(async move {
                     let _dc_permit = dc_sem.acquire().await.unwrap();
-                    let mut attempts = 0;
-                    const MAX_IMMEDIATE_ATTEMPTS: usize = 3;
-
-                    loop {
-                        attempts += 1;
-                        let size_hint = record.size_bytes.unwrap_or(0).max(0) as u64;
-                        match dl.download_item(&mut record).await {
-                            Ok(_) => {
-                                ctrl.record_success();
-                                return (true, None, size_hint);
-                            }
-                            Err(err) => {
-                                let action = err.classify_retry_action();
-                                warn!(
-                                    "Download error for {} (attempt {}): {} -> {:?}",
-                                    record.media_id, attempts, err, action
-                                );
-
-                                match action {
-                                    RetryAction::RefreshAndRetry => {
-                                        if attempts <= MAX_IMMEDIATE_ATTEMPTS
-                                            && rf
-                                                .refresh_file_reference_while_claimed(
-                                                    &mut record,
-                                                    &worker_id_str,
-                                                )
-                                                .await
-                                                .is_ok()
-                                        {
-                                            continue;
-                                        }
-                                        let _ = db_ref.update_media_status(
-                                            &record.media_id,
-                                            MediaDownloadStatus::RetryWait,
-                                            Some(&err.to_string()),
-                                            Some(now_unix_secs() + 5),
-                                        );
-                                        return (false, Some(MediaDownloadStatus::RetryWait), 0);
-                                    }
-                                    RetryAction::MigrateAndRetry { new_dc } => {
-                                        let _ = db_ref.update_media_dc_while_claimed(
-                                            &record.media_id,
-                                            new_dc,
-                                            &worker_id_str,
-                                        );
-                                        record.dc_id = new_dc;
-                                        if attempts <= MAX_IMMEDIATE_ATTEMPTS {
-                                            continue;
-                                        }
-                                        let _ = db_ref.update_media_status(
-                                            &record.media_id,
-                                            MediaDownloadStatus::RetryWait,
-                                            Some(&err.to_string()),
-                                            Some(now_unix_secs() + 2),
-                                        );
-                                        return (false, Some(MediaDownloadStatus::RetryWait), 0);
-                                    }
-                                    RetryAction::RetryAfterDelay { seconds } => {
-                                        ctrl.record_backoff();
-                                        ctrl.set_dc_cooldown(record.dc_id, seconds);
-                                        let (status, next_retry) = if record.retry_count >= record.max_retries {
-                                            (MediaDownloadStatus::PermanentlyFailed, None)
-                                        } else {
-                                            let backoff = (record.retry_count as i64 + 1).min(5);
-                                            (
-                                                MediaDownloadStatus::RetryWait,
-                                                Some(now_unix_secs() + (seconds as i64) * backoff),
-                                            )
-                                        };
-                                        let _ = db_ref.update_media_status(
-                                            &record.media_id,
-                                            status,
-                                            Some(&err.to_string()),
-                                            next_retry,
-                                        );
-                                        return (false, Some(status), 0);
-                                    }
-                                    RetryAction::RetryImmediately => {
-                                        if attempts <= MAX_IMMEDIATE_ATTEMPTS {
-                                            sleep(Duration::from_millis(100)).await;
-                                            continue;
-                                        }
-                                        let _ = db_ref.update_media_status(
-                                            &record.media_id,
-                                            MediaDownloadStatus::RetryWait,
-                                            Some(&err.to_string()),
-                                            Some(now_unix_secs() + 3),
-                                        );
-                                        return (false, Some(MediaDownloadStatus::RetryWait), 0);
-                                    }
-                                    RetryAction::PauseForAuth => {
-                                        let _ = db_ref.update_media_status(
-                                            &record.media_id,
-                                            MediaDownloadStatus::NeedsReauth,
-                                            Some(&err.to_string()),
-                                            None,
-                                        );
-                                        return (false, Some(MediaDownloadStatus::NeedsReauth), 0);
-                                    }
-                                    RetryAction::PermanentFailure => {
-                                        let _ = db_ref.update_media_status(
-                                            &record.media_id,
-                                            MediaDownloadStatus::PermanentlyFailed,
-                                            Some(&err.to_string()),
-                                            None,
-                                        );
-                                        return (
-                                            false,
-                                            Some(MediaDownloadStatus::PermanentlyFailed),
-                                            0,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }));
+                    let (success, status, bytes) =
+                        execute_download_attempt(&dl, &rf, &ctrl, &db_ref, record, &worker_id_str)
+                            .await;
+                    (worker_idx, success, status, bytes)
+                });
             }
 
-            for t in tasks {
-                if let Ok((success, status, bytes)) = t.await {
-                    if success {
-                        summary.completed_count += 1;
-                        progress_event.completed_count += 1;
-                        progress_event.downloaded_bytes += bytes;
-                    } else if let Some(st) = status {
-                        match st {
-                            MediaDownloadStatus::RetryWait => {
-                                summary.retry_wait_count += 1;
-                                progress_event.retry_wait_count += 1;
+            if tasks.is_empty() {
+                debug!("No eligible media items in flight or pending. Scheduler cycle complete.");
+                break;
+            }
+
+            if let Some(res) = tasks.join_next().await {
+                match res {
+                    Ok((worker_idx, success, status, bytes)) => {
+                        available_workers.push(worker_idx);
+                        if success {
+                            summary.completed_count += 1;
+                            progress_event.completed_count += 1;
+                            progress_event.downloaded_bytes += bytes;
+                        } else if let Some(st) = status {
+                            match st {
+                                MediaDownloadStatus::RetryWait => {
+                                    summary.retry_wait_count += 1;
+                                    progress_event.retry_wait_count += 1;
+                                }
+                                MediaDownloadStatus::PermanentlyFailed => {
+                                    summary.permanently_failed_count += 1;
+                                    progress_event.permanently_failed_count += 1;
+                                }
+                                MediaDownloadStatus::NeedsReauth => {
+                                    summary.needs_reauth_count += 1;
+                                    progress_event.needs_reauth_count += 1;
+                                }
+                                _ => {}
                             }
-                            MediaDownloadStatus::PermanentlyFailed => {
-                                summary.permanently_failed_count += 1;
-                                progress_event.permanently_failed_count += 1;
-                            }
-                            MediaDownloadStatus::NeedsReauth => {
-                                summary.needs_reauth_count += 1;
-                                progress_event.needs_reauth_count += 1;
-                            }
-                            _ => {}
                         }
+                        progress(&progress_event);
                     }
-                    progress(&progress_event);
+                    Err(join_err) => {
+                        error!("Download task panicked or failed to join: {join_err}");
+                    }
                 }
             }
         }
 
         summary
+    }
+}
+
+async fn execute_download_attempt(
+    downloader: &SingleMediaDownloader,
+    refresher: &FileReferenceRefresher,
+    controller: &DynamicConcurrencyController,
+    db: &ArchiveDb,
+    mut record: vendetta_model::MediaRecord,
+    worker_id_str: &str,
+) -> (bool, Option<MediaDownloadStatus>, u64) {
+    let mut attempts = 0;
+    const MAX_IMMEDIATE_ATTEMPTS: usize = 3;
+
+    loop {
+        attempts += 1;
+        let size_hint = record.size_bytes.unwrap_or(0).max(0) as u64;
+        match downloader.download_item(&mut record).await {
+            Ok(_) => {
+                controller.record_success();
+                return (true, None, size_hint);
+            }
+            Err(err) => {
+                let action = err.classify_retry_action();
+                warn!(
+                    "Download error for {} (attempt {}): {} -> {:?}",
+                    record.media_id, attempts, err, action
+                );
+
+                match action {
+                    RetryAction::RefreshAndRetry => {
+                        if attempts <= MAX_IMMEDIATE_ATTEMPTS
+                            && refresher
+                                .refresh_file_reference_while_claimed(&mut record, worker_id_str)
+                                .await
+                                .is_ok()
+                        {
+                            continue;
+                        }
+                        let _ = db.update_media_status(
+                            &record.media_id,
+                            MediaDownloadStatus::RetryWait,
+                            Some(&err.to_string()),
+                            Some(now_unix_secs() + 5),
+                        );
+                        return (false, Some(MediaDownloadStatus::RetryWait), 0);
+                    }
+                    RetryAction::MigrateAndRetry { new_dc } => {
+                        let _ = db.update_media_dc_while_claimed(
+                            &record.media_id,
+                            new_dc,
+                            worker_id_str,
+                        );
+                        record.dc_id = new_dc;
+                        if attempts <= MAX_IMMEDIATE_ATTEMPTS {
+                            continue;
+                        }
+                        let _ = db.update_media_status(
+                            &record.media_id,
+                            MediaDownloadStatus::RetryWait,
+                            Some(&err.to_string()),
+                            Some(now_unix_secs() + 2),
+                        );
+                        return (false, Some(MediaDownloadStatus::RetryWait), 0);
+                    }
+                    RetryAction::RetryAfterDelay { seconds } => {
+                        controller.record_backoff();
+                        controller.set_dc_cooldown(record.dc_id, seconds);
+                        let (status, next_retry) = if record.retry_count >= record.max_retries {
+                            (MediaDownloadStatus::PermanentlyFailed, None)
+                        } else {
+                            let backoff = (record.retry_count as i64 + 1).min(5);
+                            (
+                                MediaDownloadStatus::RetryWait,
+                                Some(now_unix_secs() + (seconds as i64) * backoff),
+                            )
+                        };
+                        let _ = db.update_media_status(
+                            &record.media_id,
+                            status,
+                            Some(&err.to_string()),
+                            next_retry,
+                        );
+                        return (false, Some(status), 0);
+                    }
+                    RetryAction::RetryImmediately => {
+                        if attempts <= MAX_IMMEDIATE_ATTEMPTS {
+                            sleep(Duration::from_millis(100)).await;
+                            continue;
+                        }
+                        let _ = db.update_media_status(
+                            &record.media_id,
+                            MediaDownloadStatus::RetryWait,
+                            Some(&err.to_string()),
+                            Some(now_unix_secs() + 3),
+                        );
+                        return (false, Some(MediaDownloadStatus::RetryWait), 0);
+                    }
+                    RetryAction::PauseForAuth => {
+                        let _ = db.update_media_status(
+                            &record.media_id,
+                            MediaDownloadStatus::NeedsReauth,
+                            Some(&err.to_string()),
+                            None,
+                        );
+                        return (false, Some(MediaDownloadStatus::NeedsReauth), 0);
+                    }
+                    RetryAction::PermanentFailure => {
+                        let _ = db.update_media_status(
+                            &record.media_id,
+                            MediaDownloadStatus::PermanentlyFailed,
+                            Some(&err.to_string()),
+                            None,
+                        );
+                        return (false, Some(MediaDownloadStatus::PermanentlyFailed), 0);
+                    }
+                }
+            }
+        }
     }
 }

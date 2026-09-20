@@ -147,7 +147,11 @@ impl<'a> ReplyResolver<'a> {
         format!("Chat {}", peer_id.raw())
     }
 
-    pub fn resolve_reply(&self, source_key: MessageKey, target_key: MessageKey) -> RenderReplyPreview {
+    pub fn resolve_reply(
+        &self,
+        source_key: MessageKey,
+        target_key: MessageKey,
+    ) -> RenderReplyPreview {
         let target_msg_opt = self.db.get_message(target_key).ok().flatten();
 
         let (sender_name, text_snippet, media_indicator, state) =
@@ -183,6 +187,12 @@ impl<'a> ReplyResolver<'a> {
                                     Some("Edited topic".to_string())
                                 }
                             }
+                            grammers_tl_types::enums::MessageAction::SuggestProfilePhoto(_) => {
+                                Some("Suggested profile photo".to_string())
+                            }
+                            grammers_tl_types::enums::MessageAction::ChatEditPhoto(_) => {
+                                Some("Changed group photo".to_string())
+                            }
                             _ => None,
                         }
                     } else {
@@ -197,9 +207,8 @@ impl<'a> ReplyResolver<'a> {
                 } else if let Some(desc) = service_desc {
                     Some(desc)
                 } else if let Some(t) = &target.text
-                    && !t.trim().is_empty()
+                    && let Some(first_line) = t.lines().map(str::trim).find(|l| !l.is_empty())
                 {
-                    let first_line = t.lines().next().unwrap_or("").trim();
                     let truncated = if first_line.chars().count() > 100 {
                         first_line.chars().take(97).chain("...".chars()).collect()
                     } else {
@@ -226,10 +235,8 @@ impl<'a> ReplyResolver<'a> {
             .location_map
             .get_location_full(&target_key)
             .map(|target_loc| {
-                let anchor = ArchiveUrlBuilder::message_anchor(
-                    target_key.peer_id,
-                    target_key.message_id,
-                );
+                let anchor =
+                    ArchiveUrlBuilder::message_anchor(target_key.peer_id, target_key.message_id);
                 let source_loc = self.location_map.get_location_full(&source_key);
                 let source_path = if let Some(sl) = source_loc {
                     if let Some(tid) = sl.topic_id {
@@ -258,7 +265,8 @@ impl<'a> ReplyResolver<'a> {
                     target_path
                 );
 
-                let rel = ArchiveUrlBuilder::relative_day_to_day(&source_full_rel, &target_full_rel);
+                let rel =
+                    ArchiveUrlBuilder::relative_day_to_day(&source_full_rel, &target_full_rel);
                 format!("{rel}#{anchor}")
             });
 

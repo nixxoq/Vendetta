@@ -26,8 +26,10 @@ pub struct GroupingContext<'a> {
     pub is_last_in_group: bool,
     pub show_sender: bool,
     pub show_avatar: bool,
+    pub is_group_chat: bool,
     pub topic_tag: Option<&'a str>,
     pub chat_depth: usize,
+    pub is_unified: bool,
 }
 
 pub fn render_chat_item(
@@ -53,12 +55,12 @@ pub fn render_message_bubble(
     available_avatars: &HashSet<PeerId>,
 ) -> String {
     if msg.is_service {
-        return render_service_message(msg, ctx.topic_tag.is_some());
+        return render_service_message(msg, ctx.is_unified);
     }
 
     match mode {
         PresentationMode::TelegramLike => render_telegram_like(msg, ctx, available_avatars),
-        PresentationMode::ArchiveOptimized => render_archive_optimized(msg),
+        PresentationMode::ArchiveOptimized => render_archive_optimized(msg, ctx),
     }
 }
 
@@ -75,7 +77,7 @@ pub fn render_album_bubble(
             render_album_telegram_like(album, ctx, page_idx, total_pages, available_avatars)
         }
         PresentationMode::ArchiveOptimized => {
-            render_album_archive_optimized(album, page_idx, total_pages)
+            render_album_archive_optimized(album, ctx, page_idx, total_pages)
         }
     }
 }
@@ -85,7 +87,7 @@ fn render_telegram_like(
     ctx: &GroupingContext,
     available_avatars: &HashSet<PeerId>,
 ) -> String {
-    let anchor = if ctx.topic_tag.is_some() {
+    let anchor = if ctx.is_unified {
         ArchiveUrlBuilder::unified_message_anchor(msg.key.peer_id, msg.key.message_id)
     } else {
         ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id)
@@ -137,6 +139,7 @@ fn render_telegram_like(
             );
             let _ = writeln!(html, "  {avatar_html}");
         } else if !msg.is_outgoing {
+        } else if ctx.is_group_chat && !ctx.is_first_in_group && !msg.is_outgoing {
             html.push_str("  <div class=\"avatar avatar-placeholder\"></div>\n");
         }
     }
@@ -144,7 +147,6 @@ fn render_telegram_like(
     html.push_str("  <div class=\"message-bubble\">\n");
 
     if ctx.show_sender
-        && !msg.is_outgoing
         && !msg.is_channel_post
         && let Some(name) = &msg.sender_name
     {
@@ -208,11 +210,17 @@ fn render_telegram_like(
         && !raw.is_empty()
         && msg.state != MessageState::Deleted
     {
+        let trimmed = raw.trim_matches(|c| c == '\r' || c == '\n');
         let _ = writeln!(
             html,
             "    <div class=\"{text_cls}\">{}</div>",
-            html_escape(raw).replace('\n', "<br>")
+            html_escape(trimmed).replace('\n', "<br>")
         );
+        let escaped = html_escape(raw).replace('\n', "<br>");
+        let clean = crate::entity::strip_boundary_br(&escaped);
+        if !clean.is_empty() {
+            let _ = writeln!(html, "    <div class=\"{text_cls}\">{clean}</div>");
+        }
     }
 
     if !msg.revisions.is_empty() {
@@ -273,7 +281,7 @@ fn render_album_telegram_like(
         return String::new();
     };
 
-    let primary_anchor = if ctx.topic_tag.is_some() {
+    let primary_anchor = if ctx.is_unified {
         ArchiveUrlBuilder::unified_message_anchor(
             primary_msg.key.peer_id,
             primary_msg.key.message_id,
@@ -324,6 +332,7 @@ fn render_album_telegram_like(
             );
             let _ = writeln!(html, "  {avatar_html}");
         } else if !primary_msg.is_outgoing {
+        } else if ctx.is_group_chat && !ctx.is_first_in_group && !primary_msg.is_outgoing {
             html.push_str("  <div class=\"avatar avatar-placeholder\"></div>\n");
         }
     }
@@ -331,7 +340,6 @@ fn render_album_telegram_like(
     html.push_str("  <div class=\"message-bubble album-bubble-container\">\n");
 
     if ctx.show_sender
-        && !primary_msg.is_outgoing
         && !primary_msg.is_channel_post
         && let Some(name) = &primary_msg.sender_name
     {
@@ -397,11 +405,20 @@ fn render_album_telegram_like(
             && !raw.is_empty()
             && msg.state != MessageState::Deleted
         {
+            let trimmed = raw.trim_matches(|c| c == '\r' || c == '\n');
             let _ = writeln!(
                 html,
                 "    <div class=\"message-text message-caption\">{}</div>",
-                html_escape(raw).replace('\n', "<br>")
+                html_escape(trimmed).replace('\n', "<br>")
             );
+            let escaped = html_escape(raw).replace('\n', "<br>");
+            let clean = crate::entity::strip_boundary_br(&escaped);
+            if !clean.is_empty() {
+                let _ = writeln!(
+                    html,
+                    "    <div class=\"message-text message-caption\">{clean}</div>"
+                );
+            }
         }
     }
 
@@ -541,12 +558,17 @@ fn render_dense_message_content(html: &mut String, msg: &RenderMessage) {
 
 fn render_album_archive_optimized(
     album: &RenderAlbum,
+    ctx: &GroupingContext,
     page_idx: usize,
     total_pages: usize,
 ) -> String {
     let mut html = String::with_capacity(512);
     for (idx, msg) in album.messages.iter().enumerate() {
-        let anchor = ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id);
+        let anchor = if ctx.is_unified {
+            ArchiveUrlBuilder::unified_message_anchor(msg.key.peer_id, msg.key.message_id)
+        } else {
+            ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id)
+        };
         let full_time = chrono_like_format(msg.date);
         let sender =
             msg.sender_name
@@ -602,8 +624,12 @@ fn render_album_archive_optimized(
     html
 }
 
-fn render_archive_optimized(msg: &RenderMessage) -> String {
-    let anchor = ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id);
+fn render_archive_optimized(msg: &RenderMessage, ctx: &GroupingContext) -> String {
+    let anchor = if ctx.is_unified {
+        ArchiveUrlBuilder::unified_message_anchor(msg.key.peer_id, msg.key.message_id)
+    } else {
+        ArchiveUrlBuilder::message_anchor(msg.key.peer_id, msg.key.message_id)
+    };
     let full_time = chrono_like_format(msg.date);
     let sender =
         msg.sender_name
@@ -659,4 +685,141 @@ pub fn aggregate_album_reactions(messages: &[RenderMessage]) -> Vec<RenderReacti
         }
     }
     groups
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vendetta_model::{MessageId, MessageKey, MessageState, PeerId};
+
+    #[test]
+    fn test_sender_name_in_private_chat_cluster() {
+        let peer_id = PeerId::new(123);
+        let make_msg =
+            |id: i64, date: i64, is_out: bool, sender_name: Option<&str>| RenderMessage {
+                key: MessageKey::new(peer_id, MessageId::new(id)),
+                date,
+                sender_id: if is_out { None } else { Some(peer_id) },
+                sender_name: sender_name.map(|s| s.to_string()),
+                is_outgoing: is_out,
+                state: MessageState::Active,
+                formatted_html: Some(format!("Message {id}")),
+                raw_text: Some(format!("Message {id}")),
+                reply_preview: None,
+                forward_info: None,
+                media_items: Vec::new(),
+                revisions: Vec::new(),
+                grouped_id: None,
+                is_service: false,
+                service_description: None,
+                views: None,
+                forwards_count: None,
+                author_signature: None,
+                reply_to_top_id: None,
+                reactions: Vec::new(),
+                is_channel_post: false,
+                comments_count: None,
+                has_comments: false,
+            };
+
+        let messages = vec![
+            make_msg(1, 1000, false, Some("Alice")),
+            make_msg(2, 1010, false, Some("Alice")),
+            make_msg(3, 5000, false, Some("Alice")),
+            make_msg(4, 5060, true, Some("Bob")),
+            make_msg(5, 5120, true, Some("Bob")),
+            make_msg(6, 5180, false, Some("Alice")),
+        ];
+        let items: Vec<RenderItem> = messages
+            .into_iter()
+            .map(|m| RenderItem::Message(Box::new(m)))
+            .collect();
+
+        let ctxs_p2p = crate::message::compute_item_grouping_contexts(&items, false);
+        assert!(ctxs_p2p[0].show_sender);
+        assert!(!ctxs_p2p[1].show_sender);
+        assert!(!ctxs_p2p[2].show_sender);
+        assert!(ctxs_p2p[3].show_sender);
+        assert!(!ctxs_p2p[4].show_sender);
+        assert!(ctxs_p2p[5].show_sender);
+
+        assert!(ctxs_p2p[0].is_first_in_group);
+        assert!(!ctxs_p2p[1].is_first_in_group);
+        assert!(ctxs_p2p[2].is_first_in_group);
+
+        let ctxs_group = crate::message::compute_item_grouping_contexts(&items, true);
+        assert!(ctxs_group[0].show_sender);
+        assert!(!ctxs_group[1].show_sender);
+        assert!(ctxs_group[2].show_sender);
+        assert!(!ctxs_group[3].show_sender);
+        assert!(!ctxs_group[4].show_sender);
+        assert!(ctxs_group[5].show_sender);
+
+        let avatars = HashSet::new();
+        let html1 = render_chat_item(
+            &items[0],
+            &ctxs_p2p[0],
+            PresentationMode::TelegramLike,
+            0,
+            1,
+            &avatars,
+        );
+        let html2 = render_chat_item(
+            &items[1],
+            &ctxs_p2p[1],
+            PresentationMode::TelegramLike,
+            0,
+            1,
+            &avatars,
+        );
+        let html3 = render_chat_item(
+            &items[2],
+            &ctxs_p2p[2],
+            PresentationMode::TelegramLike,
+            0,
+            1,
+            &avatars,
+        );
+        let html4 = render_chat_item(
+            &items[3],
+            &ctxs_p2p[3],
+            PresentationMode::TelegramLike,
+            0,
+            1,
+            &avatars,
+        );
+        let html5 = render_chat_item(
+            &items[4],
+            &ctxs_p2p[4],
+            PresentationMode::TelegramLike,
+            0,
+            1,
+            &avatars,
+        );
+        let html6 = render_chat_item(
+            &items[5],
+            &ctxs_p2p[5],
+            PresentationMode::TelegramLike,
+            0,
+            1,
+            &avatars,
+        );
+
+        assert!(html1.contains("<div class=\"message-sender\">Alice</div>"));
+        assert!(!html2.contains("<div class=\"message-sender\">"));
+        assert!(!html3.contains("<div class=\"message-sender\">"));
+        assert!(html4.contains("<div class=\"message-sender\">Bob</div>"));
+        assert!(!html5.contains("<div class=\"message-sender\">"));
+        assert!(html6.contains("<div class=\"message-sender\">Alice</div>"));
+
+        let html_group4 = render_chat_item(
+            &items[3],
+            &ctxs_group[3],
+            PresentationMode::TelegramLike,
+            0,
+            1,
+            &avatars,
+        );
+        assert!(!html_group4.contains("<div class=\"message-sender\">"));
+    }
 }

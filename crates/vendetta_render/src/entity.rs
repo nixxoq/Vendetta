@@ -170,22 +170,42 @@ fn escape_newlines(text: &str) -> String {
     html_escape(text).replace('\n', "<br>")
 }
 
+pub fn strip_boundary_br(mut s: &str) -> &str {
+    s = s.trim_start_matches(['\r', '\n', ' ']);
+    while let Some(stripped) = s
+        .strip_prefix("<br>")
+        .or_else(|| s.strip_prefix("<br/>"))
+        .or_else(|| s.strip_prefix("<br />"))
+    {
+        s = stripped.trim_start_matches(['\r', '\n', ' ']);
+    }
+    s = s.trim_end_matches(['\r', '\n', ' ']);
+    while let Some(stripped) = s
+        .strip_suffix("<br>")
+        .or_else(|| s.strip_suffix("<br/>"))
+        .or_else(|| s.strip_suffix("<br />"))
+    {
+        s = stripped.trim_end_matches(['\r', '\n', ' ']);
+    }
+    s
+}
+
 pub fn render_formatted_text(raw_text: &str, entities_json: Option<&str>) -> String {
     if raw_text.is_empty() {
         return String::new();
     }
 
-    let Some(json_str) = entities_json else {
-        return escape_newlines(raw_text);
+    let raw_fallback = || {
+        let escaped = escape_newlines(raw_text);
+        strip_boundary_br(&escaped).to_string()
     };
 
-    let Ok(entities) = serde_json::from_str::<Vec<tl::enums::MessageEntity>>(json_str) else {
-        return escape_newlines(raw_text);
+    let Some(entities) = entities_json
+        .and_then(|json| serde_json::from_str::<Vec<tl::enums::MessageEntity>>(json).ok())
+        .filter(|e| !e.is_empty())
+    else {
+        return raw_fallback();
     };
-
-    if entities.is_empty() {
-        return escape_newlines(raw_text);
-    }
 
     let mapper = Utf16ByteMapper::new(raw_text);
     let mut ranges = Vec::new();
@@ -256,7 +276,7 @@ pub fn render_formatted_text(raw_text: &str, entities_json: Option<&str>) -> Str
     }
 
     if ranges.is_empty() {
-        return escape_newlines(raw_text);
+        return raw_fallback();
     }
 
     ranges.sort_by(|a, b| {
@@ -267,7 +287,8 @@ pub fn render_formatted_text(raw_text: &str, entities_json: Option<&str>) -> Str
         }
     });
 
-    render_with_spans(raw_text, &ranges)
+    let rendered = render_with_spans(raw_text, &ranges);
+    strip_boundary_br(&rendered).to_string()
 }
 
 fn render_with_spans(text: &str, ranges: &[EntityRange]) -> String {
@@ -355,6 +376,24 @@ mod tests {
         assert_eq!(
             rendered,
             "Visit <a href=\"https://telegram.org\" target=\"_blank\" rel=\"noopener noreferrer\">Telegram</a> website"
+        );
+    }
+
+    #[test]
+    fn boundary_br_and_whitespace_are_cleanly_stripped() {
+        assert_eq!(
+            render_formatted_text("\nУ прегко спиздил\n       ", None),
+            "У прегко спиздил"
+        );
+        assert_eq!(render_formatted_text("\n\nфу\n       ", None), "фу");
+        assert_eq!(render_formatted_text("\n\nфу\n       ", None), "фу");
+        assert_eq!(
+            render_formatted_text("Hello\nWorld", None),
+            "Hello<br>World"
+        );
+        assert_eq!(
+            strip_boundary_br("  <br /> <br>Some text<br/>  "),
+            "Some text"
         );
     }
 }

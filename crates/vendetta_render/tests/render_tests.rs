@@ -2312,7 +2312,9 @@ fn real_avatar_renders_with_initials_fallback() {
     let summary = exporter.export().unwrap();
     assert_eq!(summary.messages_count, 3);
 
-    let exported_avatar = export_dir.path().join("export/chats/p_7001/avatars/p_7001.jpg");
+    let exported_avatar = export_dir
+        .path()
+        .join("export/chats/p_7001/avatars/p_7001.jpg");
     assert!(exported_avatar.is_file());
     assert_eq!(
         fs::read(&exported_avatar).unwrap(),
@@ -2330,9 +2332,14 @@ fn real_avatar_renders_with_initials_fallback() {
             .join("export/chats/p_7001/page_00001.html"),
     )
     .unwrap();
-    assert!(chat_page.contains(
-        "<img src=\"avatars/p_7001.jpg\" alt=\"Alice Group\" class=\"avatar-img\">"
-    ));
+    assert!(
+        chat_page
+            .contains("<img src=\"avatars/p_7001.jpg\" alt=\"Alice Group\" class=\"avatar-img\">")
+    );
+    assert!(
+        chat_page
+            .contains("<img src=\"avatars/p_7001.jpg\" alt=\"Alice Group\" class=\"avatar-img\">")
+    );
     assert!(chat_page.contains("<span class=\"avatar-text\">B</span>"));
 }
 
@@ -4554,4 +4561,152 @@ fn test_topic_linking() {
     assert!(shard_file.exists());
     let shard_content = std::fs::read_to_string(shard_file).unwrap();
     assert!(shard_content.contains("topics/10/page_00001.html#m-p_neg_999000111-11"));
+}
+
+#[test]
+fn test_suggest_profile_photo_rich_rendering_and_distinct_actions() {
+    use vendetta_model::{MediaKind, MediaRecord, PeerId};
+    use vendetta_render::{RenderMessage, message::render_service_message, model::RenderMediaItem};
+
+    let peer_id = PeerId::new(12345);
+    let make_service_msg = |id: i64, desc: &str, is_out: bool, photo_rel_url: Option<&str>| {
+        let mut media_items = Vec::new();
+        if let Some(rel) = photo_rel_url {
+            media_items.push(RenderMediaItem {
+                record: MediaRecord {
+                    media_id: format!("photo_{id}"),
+                    kind: MediaKind::Photo,
+                    mime_type: Some("image/jpeg".to_string()),
+                    size_bytes: Some(25000),
+                    file_name: Some(format!("photo_{id}.jpg")),
+                    size_type: Some("x".to_string()),
+                    width: Some(800),
+                    height: Some(600),
+                    dc_id: 2,
+                    source_location_tl: None,
+                    file_reference: None,
+                    local_rel_path: Some(rel.to_string()),
+                    sha256: None,
+                    download_status: vendetta_model::MediaDownloadStatus::Completed,
+                    downloaded_bytes: 25000,
+                    chunk_size: 524288,
+                    retry_count: 0,
+                    max_retries: 5,
+                    next_retry_at: None,
+                    claimed_at: None,
+                    worker_id: None,
+                    last_error: None,
+                    filter_decision: None,
+                    filter_reason: None,
+                    policy_version: 1,
+                    verification_status: vendetta_model::MediaVerificationStatus::Verified,
+                    created_at: 1000,
+                    updated_at: 1000,
+                },
+                relative_url: Some(rel.to_string()),
+                is_available: true,
+                unavailable_reason: None,
+            });
+        }
+
+        RenderMessage {
+            key: vendetta_model::MessageKey::new(peer_id, vendetta_model::MessageId::new(id)),
+            date: 1700000000,
+            sender_id: if is_out { None } else { Some(peer_id) },
+            sender_name: Some(if is_out {
+                "You".to_string()
+            } else {
+                "Alice".to_string()
+            }),
+            is_outgoing: is_out,
+            state: vendetta_model::MessageState::Active,
+            formatted_html: None,
+            raw_text: None,
+            reply_preview: None,
+            forward_info: None,
+            media_items,
+            revisions: Vec::new(),
+            grouped_id: None,
+            is_service: true,
+            service_description: Some(desc.to_string()),
+            views: None,
+            forwards_count: None,
+            author_signature: None,
+            reply_to_top_id: None,
+            reactions: Vec::new(),
+            is_channel_post: false,
+            comments_count: None,
+            has_comments: false,
+        }
+    };
+
+    // 1. SuggestProfilePhoto - Outgoing
+    let out_msg = make_service_msg(
+        1,
+        "You suggested this photo for Alice's Telegram profile.",
+        true,
+        Some("media/test_out.jpg"),
+    );
+    let html_out = render_service_message(&out_msg, false);
+    assert!(
+        html_out.contains("system-event-card"),
+        "Must have card class"
+    );
+    assert!(
+        html_out.contains("service-card"),
+        "Must have service-card container"
+    );
+    assert!(
+        html_out.contains("You suggested this photo for Alice&#39;s Telegram profile."),
+        "Must render personalized outgoing text"
+    );
+    assert!(
+        html_out.contains("media/test_out.jpg"),
+        "Must render photo url in service card"
+    );
+    assert!(
+        html_out.contains("View Photo"),
+        "Must render View Photo button"
+    );
+    assert!(html_out.contains("system-event-card"));
+    assert!(html_out.contains("service-card"));
+    assert!(html_out.contains("You suggested this photo for Alice&#39;s Telegram profile."));
+    assert!(html_out.contains("media/test_out.jpg"));
+    assert!(html_out.contains("View Photo"));
+
+    // 2. SuggestProfilePhoto - Incoming
+    let in_msg = make_service_msg(
+        2,
+        "Alice suggested this photo for your Telegram profile.",
+        false,
+        Some("media/test_in.jpg"),
+    );
+    let html_in = render_service_message(&in_msg, false);
+    assert!(html_in.contains("system-event-card"));
+    assert!(
+        html_in.contains("Alice suggested this photo for your Telegram profile."),
+        "Must render personalized incoming text"
+    );
+    assert!(html_in.contains("Alice suggested this photo for your Telegram profile."));
+    assert!(html_in.contains("media/test_in.jpg"));
+
+    // 3. ChatEditPhoto - Must NOT render service-card!
+    let edit_msg = make_service_msg(
+        3,
+        "Changed group photo",
+        false,
+        Some("media/group_photo.jpg"),
+    );
+    let html_edit = render_service_message(&edit_msg, false);
+    assert!(
+        !html_edit.contains("service-card"),
+        "ChatEditPhoto must NOT render as service-card"
+    );
+    assert!(
+        html_edit.contains("system-event-bubble"),
+        "ChatEditPhoto must render as standard system-event-bubble"
+    );
+    assert!(!html_edit.contains("service-card"));
+    assert!(html_edit.contains("system-event-bubble"));
+    assert!(html_edit.contains("Changed group photo"));
 }

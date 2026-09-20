@@ -59,7 +59,9 @@ impl HtmlArchiveVerifier {
             let index_path = self.export_dir.join("index.html");
             let page1_path = self.export_dir.join("page_00001.html");
             if !index_path.exists() && !page1_path.exists() {
-                report.errors.push("Missing index.html or page_00001.html in standalone chat".to_string());
+                report
+                    .errors
+                    .push("Missing index.html or page_00001.html in standalone chat".to_string());
             }
 
             let required_standalone_assets = [
@@ -69,7 +71,9 @@ impl HtmlArchiveVerifier {
             ];
             for asset in required_standalone_assets {
                 if !self.export_dir.join(asset).exists() {
-                    report.errors.push(format!("Missing standalone asset file: {asset}"));
+                    report
+                        .errors
+                        .push(format!("Missing standalone asset file: {asset}"));
                 }
             }
 
@@ -79,7 +83,10 @@ impl HtmlArchiveVerifier {
             {
                 let prefix = "window.__VENDETTA_CHAT_SEARCH__ = ";
                 if !content.starts_with(prefix) {
-                    report.errors.push("Invalid search/index.js: missing window.__VENDETTA_CHAT_SEARCH__ wrapper".to_string());
+                    report.errors.push(
+                        "Invalid search/index.js: missing window.__VENDETTA_CHAT_SEARCH__ wrapper"
+                            .to_string(),
+                    );
                 }
             }
 
@@ -260,7 +267,8 @@ impl HtmlArchiveVerifier {
                     collect_html_files(&chat_entry.path(), &mut chat_html_pages);
                     for path in chat_html_pages {
                         let is_index_file = path.file_name().is_some_and(|s| s == "index.html");
-                        let is_topic_root_redirect = chat_entry.path().join("topics").exists() && path.parent() == Some(&chat_entry.path());
+                        let is_topic_root_redirect = chat_entry.path().join("topics").exists()
+                            && path.parent() == Some(&chat_entry.path());
                         let is_chunk_page = !is_index_file && !is_topic_root_redirect;
                         if is_chunk_page {
                             all_chat_pages.insert(path.clone());
@@ -639,4 +647,3 @@ fn collect_html_files(dir: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
-

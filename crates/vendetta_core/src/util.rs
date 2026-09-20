@@ -118,13 +118,21 @@ pub fn parse_date_bound(s: &str, is_end: bool) -> std::result::Result<i64, Strin
     let clean_time = time_part.trim_end_matches('Z');
     let (h, min, sec) = match clean_time.split(':').collect::<Vec<_>>().as_slice() {
         [h_str, min_str] => {
-            let h: i64 = h_str.parse().map_err(|_| format!("Invalid hour in '{s}'"))?;
-            let min: i64 = min_str.parse().map_err(|_| format!("Invalid minute in '{s}'"))?;
+            let h: i64 = h_str
+                .parse()
+                .map_err(|_| format!("Invalid hour in '{s}'"))?;
+            let min: i64 = min_str
+                .parse()
+                .map_err(|_| format!("Invalid minute in '{s}'"))?;
             (h, min, 0)
         }
         [h_str, min_str, sec_part, ..] => {
-            let h: i64 = h_str.parse().map_err(|_| format!("Invalid hour in '{s}'"))?;
-            let min: i64 = min_str.parse().map_err(|_| format!("Invalid minute in '{s}'"))?;
+            let h: i64 = h_str
+                .parse()
+                .map_err(|_| format!("Invalid hour in '{s}'"))?;
+            let min: i64 = min_str
+                .parse()
+                .map_err(|_| format!("Invalid minute in '{s}'"))?;
             let sec: i64 = sec_part
                 .split('.')
                 .next()
@@ -161,8 +169,14 @@ mod tests {
 
     #[test]
     fn test_slugify_chat_title() {
-        assert_eq!(slugify_chat_title("Rust Architecture Group"), "rust_architecture_group");
-        assert_eq!(slugify_chat_title("My Chat / Topic: Test!"), "my_chat_topic_test");
+        assert_eq!(
+            slugify_chat_title("Rust Architecture Group"),
+            "rust_architecture_group"
+        );
+        assert_eq!(
+            slugify_chat_title("My Chat / Topic: Test!"),
+            "my_chat_topic_test"
+        );
         assert_eq!(slugify_chat_title("🔥🚀"), "chat");
         assert_eq!(slugify_chat_title("   "), "chat");
         assert_eq!(slugify_chat_title("Привет Мир 123"), "привет_мир_123");

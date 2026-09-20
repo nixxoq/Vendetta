@@ -219,6 +219,7 @@ pub const LIGHTBOX_JS: &str = r#"(function() {
       if (trigger) {
         e.preventDefault();
         const fullSrc = trigger.getAttribute('data-full-src') || trigger.getAttribute('src');
+        const fullSrc = trigger.getAttribute('data-full-src') || trigger.getAttribute('src') || trigger.getAttribute('href');
         if (fullSrc) {
           img.src = fullSrc;
           modal.classList.add('open');

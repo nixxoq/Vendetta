@@ -64,17 +64,38 @@ where
         if let Ok(tl::enums::Message::Service(s)) = tl::enums::Message::from_bytes(raw) {
             is_service = true;
             is_outgoing = s.out;
-            let formatted = format_service_action(&s.action);
-            if formatted != "Service event" {
-                service_description = Some(formatted);
-            } else if let Some(t) = &msg.text
-                && !t.trim().is_empty()
-                && t != "Service action"
-            {
-                service_description = Some(t.clone());
-            } else {
-                service_description = Some(formatted);
-            }
+
+            service_description = match &s.action {
+                tl::enums::MessageAction::SuggestProfilePhoto(_) => {
+                    if let Some(t) = &msg.text
+                        && (t.contains("suggested this photo")
+                            || t.contains("Suggested this photo"))
+                    {
+                        Some(t.clone())
+                    } else {
+                        let peer_name = (ctx.authoritative_name_resolver)(msg.key.peer_id)
+                            .unwrap_or_else(|| format!("User {}", msg.key.peer_id.raw()));
+                        Some(if s.out {
+                            format!("You suggested this photo for {peer_name}'s Telegram profile.")
+                        } else {
+                            format!("{peer_name} suggested this photo for your Telegram profile.")
+                        })
+                    }
+                }
+                action => {
+                    let formatted = format_service_action(action);
+                    if formatted != "Service event" {
+                        Some(formatted)
+                    } else if let Some(t) = &msg.text
+                        && !t.trim().is_empty()
+                        && t != "Service action"
+                    {
+                        Some(t.clone())
+                    } else {
+                        Some(formatted)
+                    }
+                }
+            };
         } else if let Ok(tl::enums::Message::Message(m)) = tl::enums::Message::from_bytes(raw) {
             is_outgoing = m.out;
             author_signature = m.post_author;
@@ -86,6 +107,17 @@ where
             }
         }
     }
+
+    let (sender_id, sender_name) = if msg.sender_id.is_none() && !is_outgoing && !is_channel {
+        (
+            Some(msg.key.peer_id),
+            sender_name.or_else(|| (ctx.authoritative_name_resolver)(msg.key.peer_id)),
+        )
+    } else if msg.sender_id.is_none() && is_outgoing {
+        (None, sender_name.or_else(|| Some("You".to_string())))
+    } else {
+        (msg.sender_id, sender_name)
+    };
 
     let formatted_html = msg
         .text
@@ -104,10 +136,7 @@ where
     let reply_preview = if !is_forum_topic_root && let Some(target_id) = msg.reply_to_msg_id {
         let target_peer = msg.reply_to_peer_id.unwrap_or(msg.key.peer_id);
         let target_key = MessageKey::new(target_peer, target_id);
-        Some(
-            ctx.reply_resolver
-                .resolve_reply(msg.key, target_key),
-        )
+        Some(ctx.reply_resolver.resolve_reply(msg.key, target_key))
     } else {
         None
     };
@@ -230,7 +259,7 @@ where
     Ok(RenderMessage {
         key: msg.key,
         date: msg.date,
-        sender_id: msg.sender_id,
+        sender_id,
         sender_name,
         is_outgoing,
         state: msg.state,
@@ -322,8 +351,7 @@ pub fn resolve_reactions(
                 });
 
                 if exists {
-                    let rel_url =
-                        ArchiveUrlBuilder::scoped_reaction_url(chat_depth, document_id);
+                    let rel_url = ArchiveUrlBuilder::scoped_reaction_url(chat_depth, document_id);
                     RenderReactionKey::CustomEmoji {
                         document_id,
                         alt_text: None,

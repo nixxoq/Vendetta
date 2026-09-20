@@ -21,28 +21,67 @@ pub fn discover_topics(messages: &[MessageRecord]) -> BTreeMap<i32, TopicInfo> {
     )]);
 
     for msg in messages {
+        if let Some(top_id) = msg.reply_to_top_id {
+            let tid = top_id.raw() as i32;
+            if tid > 0 {
+                discovered.entry(tid).or_insert_with(|| TopicInfo {
+                    topic_id: tid,
+                    title: format!("Topic {tid}"),
+                    icon_color: None,
+                    icon_emoji_id: None,
+                    is_general: tid == 1,
+                    is_closed: false,
+                    is_pinned: false,
+                    is_hidden: false,
+                });
+            }
+        }
+
         if let Some(ref raw) = msg.raw_tl
-            && let Ok(tl::enums::Message::Service(s)) = tl::enums::Message::from_bytes(raw)
+            && let Ok(tl_msg) = tl::enums::Message::from_bytes(raw)
         {
-            match &s.action {
-                tl::enums::MessageAction::TopicCreate(tc) => {
-                    discovered.insert(
-                        msg.key.message_id.raw() as i32,
-                        TopicInfo {
-                            topic_id: msg.key.message_id.raw() as i32,
-                            title: tc.title.clone(),
-                            icon_color: Some(tc.icon_color),
-                            icon_emoji_id: tc.icon_emoji_id,
-                            is_general: false,
-                            is_closed: false,
-                            is_pinned: false,
-                            is_hidden: false,
-                        },
-                    );
+            let reply_header = match &tl_msg {
+                tl::enums::Message::Service(s) => s.reply_to.as_ref(),
+                tl::enums::Message::Message(m) => m.reply_to.as_ref(),
+                tl::enums::Message::Empty(_) => None,
+            };
+            if let Some(tl::enums::MessageReplyHeader::Header(h)) = reply_header {
+                let tid = h.reply_to_top_id.unwrap_or(0);
+                if tid > 0 {
+                    discovered.entry(tid).or_insert_with(|| TopicInfo {
+                        topic_id: tid,
+                        title: format!("Topic {tid}"),
+                        icon_color: None,
+                        icon_emoji_id: None,
+                        is_general: tid == 1,
+                        is_closed: false,
+                        is_pinned: false,
+                        is_hidden: false,
+                    });
                 }
-                tl::enums::MessageAction::TopicEdit(te) => {
-                    let target_tid =
-                        msg.reply_to_top_id
+            }
+
+            if let tl::enums::Message::Service(s) = tl_msg {
+                match &s.action {
+                    tl::enums::MessageAction::TopicCreate(tc) => {
+                        let tid = msg.key.message_id.raw() as i32;
+                        discovered.insert(
+                            tid,
+                            TopicInfo {
+                                topic_id: tid,
+                                title: tc.title.clone(),
+                                icon_color: Some(tc.icon_color),
+                                icon_emoji_id: tc.icon_emoji_id,
+                                is_general: false,
+                                is_closed: false,
+                                is_pinned: false,
+                                is_hidden: false,
+                            },
+                        );
+                    }
+                    tl::enums::MessageAction::TopicEdit(te) => {
+                        let target_tid = msg
+                            .reply_to_top_id
                             .map(|t| t.raw() as i32)
                             .unwrap_or_else(|| {
                                 if let Some(tl::enums::MessageReplyHeader::Header(h)) = &s.reply_to
@@ -53,22 +92,23 @@ pub fn discover_topics(messages: &[MessageRecord]) -> BTreeMap<i32, TopicInfo> {
                                 }
                             });
 
-                    if let Some(entry) = discovered.get_mut(&target_tid) {
-                        if let Some(ref title) = te.title {
-                            entry.title = title.clone();
-                        }
-                        if let Some(closed) = te.closed {
-                            entry.is_closed = closed;
-                        }
-                        if let Some(hidden) = te.hidden {
-                            entry.is_hidden = hidden;
-                        }
-                        if let Some(icon) = te.icon_emoji_id {
-                            entry.icon_emoji_id = Some(icon);
+                        if let Some(entry) = discovered.get_mut(&target_tid) {
+                            if let Some(ref title) = te.title {
+                                entry.title = title.clone();
+                            }
+                            if let Some(closed) = te.closed {
+                                entry.is_closed = closed;
+                            }
+                            if let Some(hidden) = te.hidden {
+                                entry.is_hidden = hidden;
+                            }
+                            if let Some(icon) = te.icon_emoji_id {
+                                entry.icon_emoji_id = Some(icon);
+                            }
                         }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
