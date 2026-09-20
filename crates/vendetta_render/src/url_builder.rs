@@ -22,7 +22,7 @@ impl ArchiveUrlBuilder {
     }
 
     pub fn unified_messages_page_file_name(page_index: usize) -> String {
-        format!("messages_page_{:05}.html", page_index + 1)
+        Self::page_file_name(page_index)
     }
 
     pub fn topic_page_file_name(topic_id: i32, page_index: usize) -> String {

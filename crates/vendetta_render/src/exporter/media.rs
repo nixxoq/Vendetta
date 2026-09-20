@@ -230,7 +230,9 @@ pub fn materialize_chat_scope(
                                 if let Some(ref sh) = m.sha256 {
                                     hasher.update(sh.as_bytes());
                                 }
-                                manifest.media_files.push(file_rel.to_string_lossy().to_string());
+                                manifest
+                                    .media_files
+                                    .push(file_rel.to_string_lossy().to_string());
                                 manifest.total_copied += 1;
                             }
                         }

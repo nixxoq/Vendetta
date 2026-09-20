@@ -1338,7 +1338,14 @@ pub fn audit_media(
                             findings.push(*finding);
                         }
 
-                        let full_path = root_dir.join(rel_path);
+                        let clean_rel = rel_path.strip_prefix("media/").unwrap_or(rel_path);
+                        let full_path = if root_dir.join(rel_path).exists() {
+                            root_dir.join(rel_path)
+                        } else if root_dir.join(clean_rel).exists() {
+                            root_dir.join(clean_rel)
+                        } else {
+                            root_dir.join(rel_path)
+                        };
 
                         if !full_path.exists() {
                             metrics.missing_files += 1;
@@ -1599,9 +1606,14 @@ fn scan_orphan_files(
                     metrics.part_files_checked += 1;
 
                     let base_rel = rel_str.trim_end_matches(".part").to_string();
-                    let has_active_lease = active_downloading_paths.contains_key(&base_rel);
+                    let base_rel_with_media = format!("media/{base_rel}");
+                    let has_active_lease = active_downloading_paths.contains_key(&base_rel)
+                        || active_downloading_paths.contains_key(&base_rel_with_media);
 
-                    if !has_active_lease && !known_paths.contains(&base_rel) {
+                    if !has_active_lease
+                        && !known_paths.contains(&base_rel)
+                        && !known_paths.contains(&base_rel_with_media)
+                    {
                         findings.push(VerificationFinding {
                             code: "ORPHAN_PART_FILE".to_string(),
                             severity: FindingSeverity::Warning,
@@ -1622,26 +1634,31 @@ fn scan_orphan_files(
                             recommendation: Some("Resume download or delete stale .part file.".to_string()),
                         });
                     }
-                } else if !known_paths.contains(&rel_str)
-                    && !active_downloading_paths.contains_key(&rel_str)
-                {
-                    metrics.orphan_media_files += 1;
-                    findings.push(VerificationFinding {
-                        code: "ORPHAN_MEDIA_FILE".to_string(),
-                        severity: FindingSeverity::Info,
-                        category: FindingCategory::Media,
-                        peer_id: None,
-                        message_id: None,
-                        media_id: None,
-                        path: Some(rel_str.clone()),
-                        description: format!(
-                            "File on disk is not referenced by any active/completed media_object: {rel_str}"
-                        ),
-                        evidence: Some(serde_json::json!({ "path": rel_str })),
-                        recommendation: Some(
-                            "Investigate if file is from a previous or failed export.".to_string(),
-                        ),
-                    });
+                } else {
+                    let rel_str_with_media = format!("media/{rel_str}");
+                    let is_orphan = !known_paths.contains(&rel_str)
+                        && !known_paths.contains(&rel_str_with_media)
+                        && !active_downloading_paths.contains_key(&rel_str)
+                        && !active_downloading_paths.contains_key(&rel_str_with_media);
+                    if is_orphan {
+                        metrics.orphan_media_files += 1;
+                        findings.push(VerificationFinding {
+                            code: "ORPHAN_MEDIA_FILE".to_string(),
+                            severity: FindingSeverity::Info,
+                            category: FindingCategory::Media,
+                            peer_id: None,
+                            message_id: None,
+                            media_id: None,
+                            path: Some(rel_str.clone()),
+                            description: format!(
+                                "File on disk is not referenced by any active/completed media_object: {rel_str}"
+                            ),
+                            evidence: Some(serde_json::json!({ "path": rel_str })),
+                            recommendation: Some(
+                                "Investigate if file is from a previous or failed export.".to_string(),
+                            ),
+                        });
+                    }
                 }
             }
         }

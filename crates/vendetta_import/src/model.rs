@@ -57,13 +57,14 @@ pub struct ImportMessage {
 
 impl ImportMessage {
     pub fn to_message_record(&self, chat_id: PeerId) -> MessageRecord {
-        let entities_json = if self.entities.is_empty() {
-            None
-        } else {
-            let tl_entities: Vec<tl::enums::MessageEntity> =
-                self.entities.iter().map(ImportTextEntity::to_tl).collect();
-            serde_json::to_string(&tl_entities).ok()
-        };
+        let entities_json = (!self.entities.is_empty())
+            .then(|| {
+                self.entities
+                    .iter()
+                    .map(ImportTextEntity::to_tl)
+                    .collect::<Vec<_>>()
+            })
+            .and_then(|tl_entities| serde_json::to_string(&tl_entities).ok());
 
         let forward_json = self.forward_info.as_ref().map(|f| {
             serde_json::json!({
@@ -73,10 +74,8 @@ impl ImportMessage {
             .to_string()
         });
 
-        let reactions_json = if self.reactions.is_empty() {
-            None
-        } else {
-            let results: Vec<serde_json::Value> = self
+        let reactions_json = (!self.reactions.is_empty()).then(|| {
+            let results: Vec<_> = self
                 .reactions
                 .iter()
                 .map(|r| {
@@ -86,24 +85,44 @@ impl ImportMessage {
                     })
                 })
                 .collect();
+
             serde_json::json!({
                 "can_see_list": true,
                 "results": results,
                 "recent_reactions": []
             })
             .to_string()
-            .into()
-        };
+        });
 
-        let state = if self.edit_date.is_some() {
-            MessageState::Edited
-        } else {
-            MessageState::Active
-        };
+        let state = self
+            .edit_date
+            .map_or(MessageState::Active, |_| MessageState::Edited);
 
-        let raw_tl = if let Some(ref event) = self.service_event {
-            let action = event.to_tl_action();
-            let svc = tl::types::MessageService {
+        MessageRecord {
+            key: MessageKey::new(chat_id, self.message_id),
+            date: self.date,
+            sender_id: self.sender_id,
+            text: self.text.clone(),
+            entities_json,
+            edit_date: self.edit_date,
+            state,
+            reply_to_msg_id: self.reply_to_message_id,
+            reply_to_top_id: None,
+            reply_to_peer_id: self.reply_to_message_id.map(|_| chat_id),
+            grouped_id: None,
+            forward_json,
+            reactions_json,
+            views: None,
+            forwards_count: None,
+            raw_tl: Some(self.to_tl_bytes(chat_id)),
+        }
+    }
+
+    fn to_tl_bytes(&self, chat_id: PeerId) -> Vec<u8> {
+        let peer = peer_id_to_tl_user(chat_id);
+
+        match &self.service_event {
+            Some(event) => tl::enums::Message::Service(tl::types::MessageService {
                 out: self.is_outgoing,
                 mentioned: false,
                 media_unread: false,
@@ -114,18 +133,15 @@ impl ImportMessage {
                 legacy: false,
                 id: self.message_id.raw() as i32,
                 from_id: None,
-                peer_id: tl::enums::Peer::User(tl::types::PeerUser {
-                    user_id: chat_id.raw().unsigned_abs() as i64,
-                }),
+                peer_id: peer,
                 saved_peer_id: None,
                 reply_to: None,
                 date: self.date as i32,
-                action,
+                action: event.to_tl_action(),
                 ttl_period: None,
-            };
-            Some(tl::enums::Message::Service(svc).to_bytes())
-        } else {
-            let msg = tl::types::Message {
+            })
+            .to_bytes(),
+            None => tl::enums::Message::Message(tl::types::Message {
                 out: self.is_outgoing,
                 mentioned: false,
                 media_unread: false,
@@ -142,16 +158,10 @@ impl ImportMessage {
                 paid_suggested_post_stars: false,
                 paid_suggested_post_ton: false,
                 id: self.message_id.raw() as i32,
-                from_id: self.sender_id.map(|s| {
-                    tl::enums::Peer::User(tl::types::PeerUser {
-                        user_id: s.raw().unsigned_abs() as i64,
-                    })
-                }),
+                from_id: self.sender_id.map(peer_id_to_tl_user),
                 from_boosts_applied: None,
                 from_rank: None,
-                peer_id: tl::enums::Peer::User(tl::types::PeerUser {
-                    user_id: chat_id.raw().unsigned_abs() as i64,
-                }),
+                peer_id: peer,
                 saved_peer_id: None,
                 fwd_from: None,
                 via_bot_id: None,
@@ -181,29 +191,16 @@ impl ImportMessage {
                 schedule_repeat_period: None,
                 summary_from_language: None,
                 rich_message: None,
-            };
-            Some(tl::enums::Message::Message(msg).to_bytes())
-        };
-
-        MessageRecord {
-            key: MessageKey::new(chat_id, self.message_id),
-            date: self.date,
-            sender_id: self.sender_id,
-            text: self.text.clone(),
-            entities_json,
-            edit_date: self.edit_date,
-            state,
-            reply_to_msg_id: self.reply_to_message_id,
-            reply_to_top_id: None,
-            reply_to_peer_id: self.reply_to_message_id.map(|_| chat_id),
-            grouped_id: None,
-            forward_json,
-            reactions_json,
-            views: None,
-            forwards_count: None,
-            raw_tl,
+            })
+            .to_bytes(),
         }
     }
+}
+
+fn peer_id_to_tl_user(id: PeerId) -> tl::enums::Peer {
+    tl::enums::Peer::User(tl::types::PeerUser {
+        user_id: id.raw().unsigned_abs() as i64,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -233,6 +230,7 @@ impl ImportTextEntity {
     pub fn to_tl(&self) -> tl::enums::MessageEntity {
         let offset = self.offset_utf16 as i32;
         let length = self.length_utf16 as i32;
+
         match &self.kind {
             ImportEntityKind::Bold => {
                 tl::enums::MessageEntity::Bold(tl::types::MessageEntityBold { offset, length })

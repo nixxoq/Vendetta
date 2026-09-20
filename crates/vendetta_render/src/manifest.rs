@@ -318,7 +318,7 @@ fn default_export_format() -> String {
 }
 
 fn default_renderer_version() -> String {
-    "vendetta_render_v2".to_string()
+    "vendetta_render_v3".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -88,12 +88,49 @@ fn is_same_cluster(a: &RenderMessage, b: &RenderMessage) -> bool {
         && (a.date - b.date).abs() <= GROUP_TIME_WINDOW_SECS
 }
 
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ActualSender {
+    Outgoing {
+        sender_id: Option<vendetta_model::PeerId>,
+        sender_name: Option<String>,
+    },
+    Incoming {
+        sender_id: Option<vendetta_model::PeerId>,
+        sender_name: Option<String>,
+    },
+}
+
+impl ActualSender {
+    pub fn from_message(msg: &RenderMessage) -> Self {
+        let (sender_id, sender_name) = (msg.sender_id, msg.sender_name.clone());
+        if msg.is_outgoing {
+            Self::Outgoing {
+                sender_id,
+                sender_name,
+            }
+        } else {
+            Self::Incoming {
+                sender_id,
+                sender_name,
+            }
+        }
+    }
+}
+
 pub fn compute_item_grouping_contexts<'a>(
     items: &'a [RenderItem],
     is_group_chat: bool,
 ) -> Vec<GroupingContext<'a>> {
+    compute_item_grouping_contexts_with_state(items, is_group_chat, None).0
+}
+
+pub fn compute_item_grouping_contexts_with_state<'a>(
+    items: &'a [RenderItem],
+    is_group_chat: bool,
+    mut last_actual_sender: Option<ActualSender>,
+) -> (Vec<GroupingContext<'a>>, Option<ActualSender>) {
     if items.is_empty() {
-        return Vec::new();
+        return (Vec::new(), last_actual_sender);
     }
 
     let mut contexts = Vec::with_capacity(items.len());
@@ -121,25 +158,44 @@ pub fn compute_item_grouping_contexts<'a>(
         let is_last = !is_next_same;
         let is_channel = current_msg.is_channel_post;
 
+        let current_actual_sender = ActualSender::from_message(current_msg);
+
+        let show_sender = if is_group_chat {
+            is_first && !current_msg.is_outgoing && !is_channel
+        } else {
+            !is_channel && last_actual_sender.as_ref() != Some(&current_actual_sender)
+        };
+        last_actual_sender = Some(current_actual_sender);
+
         contexts.push(GroupingContext {
             is_first_in_group: is_first,
             is_last_in_group: is_last,
-            show_sender: is_first && is_group_chat && !current_msg.is_outgoing && !is_channel,
+            show_sender,
             show_avatar: is_first && is_group_chat && !current_msg.is_outgoing && !is_channel,
+            is_group_chat,
             topic_tag: None,
             chat_depth: 0,
+            is_unified: false,
         });
     }
 
-    contexts
+    (contexts, last_actual_sender)
 }
 
 pub fn compute_grouping_contexts<'a>(
     messages: &[RenderMessage],
     is_group_chat: bool,
 ) -> Vec<GroupingContext<'a>> {
+    compute_grouping_contexts_with_state(messages, is_group_chat, None).0
+}
+
+pub fn compute_grouping_contexts_with_state<'a>(
+    messages: &[RenderMessage],
+    is_group_chat: bool,
+    mut last_actual_sender: Option<ActualSender>,
+) -> (Vec<GroupingContext<'a>>, Option<ActualSender>) {
     if messages.is_empty() {
-        return Vec::new();
+        return (Vec::new(), last_actual_sender);
     }
 
     let mut contexts = Vec::with_capacity(messages.len());
@@ -159,15 +215,26 @@ pub fn compute_grouping_contexts<'a>(
         let is_last = !is_next_same;
         let is_channel = current.is_channel_post;
 
+        let current_actual_sender = ActualSender::from_message(current);
+
+        let show_sender = if is_group_chat {
+            is_first && !current.is_outgoing && !is_channel
+        } else {
+            !is_channel && last_actual_sender.as_ref() != Some(&current_actual_sender)
+        };
+        last_actual_sender = Some(current_actual_sender);
+
         contexts.push(GroupingContext {
             is_first_in_group: is_first,
             is_last_in_group: is_last,
-            show_sender: is_first && is_group_chat && !current.is_outgoing && !is_channel,
+            show_sender,
             show_avatar: is_first && is_group_chat && !current.is_outgoing && !is_channel,
+            is_group_chat,
             topic_tag: None,
             chat_depth: 0,
+            is_unified: false,
         });
     }
 
-    contexts
+    (contexts, last_actual_sender)
 }

@@ -1,11 +1,14 @@
-use std::{collections::{HashMap, HashSet}, fmt::Write};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write,
+};
 
 use vendetta_model::{PeerId, PeerType};
 
 use crate::{
     assets::SYMBOLS_SVG,
     entity::html_escape,
-    message::{bubble::render_chat_item, compute_item_grouping_contexts, edits::days_to_ymd},
+    message::{bubble::render_chat_item, edits::days_to_ymd},
     model::{PresentationMode, RenderItem, RenderPeer, RenderTopic, ThemeMode},
     url_builder::{ArchiveUrlBuilder, render_avatar_markup},
 };
@@ -29,6 +32,7 @@ pub struct DialogPageContext<'a> {
     pub custom_next_url: Option<String>,
     pub custom_page_indicator: Option<String>,
     pub chat_dirs: Option<&'a HashMap<PeerId, String>>,
+    pub initial_sender: Option<crate::message::ActualSender>,
 }
 
 fn render_topics_sidebar(
@@ -153,19 +157,25 @@ fn render_forum_actions_menu(
         )
     } else {
         let messages_url = if chat_depth == 2 {
-            "../messages/page_00001.html".to_string()
+            format!(
+                "../messages/{}",
+                ArchiveUrlBuilder::unified_messages_page_file_name(0)
+            )
         } else {
-            "topics/messages/page_00001.html".to_string()
+            format!(
+                "topics/messages/{}",
+                ArchiveUrlBuilder::unified_messages_page_file_name(0)
+            )
         };
         format!(
             r##"<details class="header-menu-dropdown forum-menu-dropdown">
   <summary class="btn-icon" title="Chat Actions" aria-label="Chat Actions">
     <svg class="icon"><use href="#icon-more-vertical"></use></svg>
   </summary>
-  <div class="header-menu-popover">
-    <a href="{messages_url}" class="header-menu-item">
-      <svg class="icon"><use href="#icon-messages"></use></svg>
-      <span>View as messages</span>
+  <div class="menu-dropdown-content">
+    <a href="{messages_url}" class="menu-item">
+      <svg class="icon"><use href="#icon-document"></use></svg>
+      <span>All Messages (Chronological)</span>
     </a>
   </div>
 </details>"##
@@ -174,6 +184,12 @@ fn render_forum_actions_menu(
 }
 
 pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
+    render_dialog_page_with_state(ctx).0
+}
+
+pub fn render_dialog_page_with_state(
+    ctx: &DialogPageContext,
+) -> (String, Option<crate::message::ActualSender>) {
     let mode_css = match ctx.presentation_mode {
         PresentationMode::TelegramLike => "telegram_like.css",
         PresentationMode::ArchiveOptimized => "archive_dense.css",
@@ -186,7 +202,11 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
     };
 
     let is_group = ctx.current_peer.peer_type != PeerType::User;
-    let grouping_ctxs = compute_item_grouping_contexts(ctx.items, is_group);
+    let (grouping_ctxs, next_sender) = crate::message::compute_item_grouping_contexts_with_state(
+        ctx.items,
+        is_group,
+        ctx.initial_sender.clone(),
+    );
 
     let dialogs_html: String = ctx
         .all_peers
@@ -248,6 +268,7 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
 
     let mut messages_html = String::with_capacity(ctx.items.len() * 512);
     let mut last_date_day = None;
+    let mut rendered_date_anchors = HashSet::new();
 
     for (idx, item) in ctx.items.iter().enumerate() {
         let item_date = match item {
@@ -259,9 +280,14 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         if last_date_day != Some(days) {
             let (y, m, d) = days_to_ymd(days);
             let date_label = format!("{y:04}-{m:02}-{d:02}");
+            let id_attr = if rendered_date_anchors.insert(date_label.clone()) {
+                format!(" id=\"d-{date_label}\"")
+            } else {
+                String::new()
+            };
             let _ = writeln!(
                 messages_html,
-                "<div class=\"date-separator\" id=\"d-{date_label}\"><span class=\"date-separator-pill\">{date_label}</span></div>"
+                "<div class=\"date-separator\"{id_attr}><span class=\"date-separator-pill\">{date_label}</span></div>"
             );
             last_date_day = Some(days);
         }
@@ -282,6 +308,7 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         };
         g_ctx.topic_tag = topic_tag_buf.as_deref();
         g_ctx.chat_depth = ctx.chat_depth;
+        g_ctx.is_unified = ctx.is_unified_messages_view;
 
         messages_html.push_str(&render_chat_item(
             item,
@@ -293,7 +320,9 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         ));
     }
 
-    let (prev_link, next_link, page_indicator_html) = if let Some(ref ind) = ctx.custom_page_indicator {
+    let (prev_link, next_link, page_indicator_html) = if let Some(ref ind) =
+        ctx.custom_page_indicator
+    {
         let prev = if let Some(ref url) = ctx.custom_prev_url {
             format!("<a href=\"{url}\" class=\"btn-nav\">← Previous Day</a>")
         } else {
@@ -333,7 +362,9 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         };
         let cur_page_display = ctx.page_index + 1;
         let total_pages_display = ctx.total_pages.max(1);
-        let indicator = format!("<div class=\"page-indicator\">Page {cur_page_display} of {total_pages_display}</div>");
+        let indicator = format!(
+            "<div class=\"page-indicator\">Page {cur_page_display} of {total_pages_display}</div>"
+        );
         (prev, next, indicator)
     };
     let escaped_name = html_escape(&ctx.current_peer.name);
@@ -413,7 +444,7 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
     let root_index_url = format!("{assets_prefix}index.html");
     let search_base_path = assets_prefix.clone();
 
-    format!(
+    let html = format!(
         r##"<!DOCTYPE html>
 <html lang="en" {theme_attr}>
 <head>
@@ -553,5 +584,6 @@ pub fn render_dialog_page(ctx: &DialogPageContext) -> String {
         html_escape(ctx.current_peer.peer_type.as_ref()),
         ctx.current_peer.peer_id.raw(),
         ctx.current_peer.total_messages
-    )
+    );
+    (html, next_sender)
 }

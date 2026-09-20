@@ -85,7 +85,5 @@ pub fn generate_manifest_js(manifest: &SearchManifest) -> serde_json::Result<Str
 
 pub fn generate_chat_search_js(entries: &[SearchEntry]) -> serde_json::Result<String> {
     let safe_json = safe_json_for_script(entries)?;
-    Ok(format!(
-        "window.__VENDETTA_CHAT_SEARCH__ = {safe_json};\n"
-    ))
+    Ok(format!("window.__VENDETTA_CHAT_SEARCH__ = {safe_json};\n"))
 }

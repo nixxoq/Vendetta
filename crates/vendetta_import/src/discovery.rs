@@ -17,15 +17,15 @@ pub enum TDesktopFormat {
 
 #[derive(Debug, Clone)]
 pub struct TDesktopChatSource {
-    pub base_dir: PathBuf,
+    pub basedir: PathBuf,
     pub format: TDesktopFormat,
-    pub entry_files: Vec<PathBuf>,
-    pub title_hint: Option<String>,
+    pub files: Vec<PathBuf>,
+    pub title: Option<String>,
     pub internal_discriminator: Option<String>,
 }
 
 pub struct DiscoverySession {
-    _extracted_tempdir: Option<TempDir>,
+    _tempdir: Option<TempDir>,
     pub chat_sources: Vec<TDesktopChatSource>,
 }
 
@@ -35,12 +35,12 @@ pub fn discover_export(source_path: &Path) -> ImportResult<DiscoverySession> {
     }
 
     let (root_dir, tempdir) = if source_path.is_file() {
-        let ext = source_path
+        let is_zip = source_path
             .extension()
             .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if ext == "zip" {
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"));
+
+        if is_zip {
             let temp = extract_zip_safely(source_path)?;
             let path = temp.path().to_path_buf();
             (path, Some(temp))
@@ -53,77 +53,42 @@ pub fn discover_export(source_path: &Path) -> ImportResult<DiscoverySession> {
         (source_path.to_path_buf(), None)
     };
 
-    let chat_sources = discover_in_directory(&root_dir)?;
+    let chat_sources = discover_chats(&root_dir)?;
     if chat_sources.is_empty() {
         return Err(ImportError::UnrecognizedExportFormat(root_dir));
     }
 
     Ok(DiscoverySession {
-        _extracted_tempdir: tempdir,
+        _tempdir: tempdir,
         chat_sources,
     })
 }
 
-fn discover_in_directory(root: &Path) -> ImportResult<Vec<TDesktopChatSource>> {
-    // 1. Check for root result.json
+fn discover_chats(root: &Path) -> ImportResult<Vec<TDesktopChatSource>> {
     let root_json = root.join("result.json");
-    if root_json.is_file() {
-        let content = fs::read_to_string(&root_json)?;
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-            // Full-account JSON: contains chats.list
-            if let Some(chats_list) = val
-                .get("chats")
-                .and_then(|c| c.get("list"))
-                .and_then(|l| l.as_array())
-            {
-                info!(
-                    "Discovered Full-Account TDesktop JSON export with {} chats",
-                    chats_list.len()
-                );
-                return Ok(vec![TDesktopChatSource {
-                    base_dir: root.to_path_buf(),
-                    format: TDesktopFormat::Json,
-                    entry_files: vec![root_json],
-                    title_hint: None,
-                    internal_discriminator: None,
-                }]);
-            }
-            // Single-chat JSON: root contains messages
-            if val.get("messages").and_then(|m| m.as_array()).is_some() {
-                let name = val
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .map(ToString::to_string);
-                info!("Discovered Single-Chat TDesktop JSON export: {:?}", name);
-                return Ok(vec![TDesktopChatSource {
-                    base_dir: root.to_path_buf(),
-                    format: TDesktopFormat::Json,
-                    entry_files: vec![root_json],
-                    title_hint: name,
-                    internal_discriminator: None,
-                }]);
-            }
-        }
+
+    if root_json.is_file()
+        && let Some(source) = discover_json_source(root, &root_json)?
+    {
+        return Ok(vec![source]);
     }
 
-    // 2. Check for root messages.html (Single-Chat HTML)
-    let root_html_files = collect_chunk_html_files(root);
+    let root_html_files = collect_html(root);
     if !root_html_files.is_empty() {
         info!(
             "Discovered Single-Chat TDesktop HTML export with {} pages",
             root_html_files.len()
         );
+
         return Ok(vec![TDesktopChatSource {
-            base_dir: root.to_path_buf(),
+            basedir: root.to_path_buf(),
             format: TDesktopFormat::Html,
-            entry_files: root_html_files,
-            title_hint: None,
+            files: root_html_files,
+            title: None,
             internal_discriminator: None,
         }]);
     }
 
-    // 3. Check for subdirectories (e.g. chats/ or a single subfolder containing the export)
-    let mut sources = Vec::new();
     let chats_dir = root.join("chats");
     let scan_dir = if chats_dir.is_dir() {
         chats_dir
@@ -131,73 +96,113 @@ fn discover_in_directory(root: &Path) -> ImportResult<Vec<TDesktopChatSource>> {
         root.to_path_buf()
     };
 
-    if let Ok(entries) = fs::read_dir(&scan_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let html_files = collect_chunk_html_files(&path);
-                let is_html = !html_files.is_empty();
-                let is_json = !is_html && path.join("result.json").is_file();
+    let mut sources = fs::read_dir(scan_dir)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| discover_chat_source(entry.path()))
+        .collect::<Vec<_>>();
 
-                if is_html || is_json {
-                    let folder_name = path
-                        .file_name()
-                        .and_then(|f| f.to_str())
-                        .unwrap_or("chat")
-                        .to_string();
-
-                    let (format, entry_files) = if is_html {
-                        (TDesktopFormat::Html, html_files)
-                    } else {
-                        (TDesktopFormat::Json, vec![path.join("result.json")])
-                    };
-
-                    sources.push(TDesktopChatSource {
-                        base_dir: path,
-                        format,
-                        entry_files,
-                        title_hint: None,
-                        internal_discriminator: Some(folder_name),
-                    });
-                }
-            }
-        }
+    if sources.is_empty() {
+        return Err(ImportError::UnrecognizedExportFormat(root.to_path_buf()));
     }
 
-    if !sources.is_empty() {
-        info!(
-            "Discovered Multi-Chat TDesktop export with {} chats",
-            sources.len()
-        );
-        // Sort stably by discriminator/dir
-        sources.sort_by(|a, b| a.base_dir.cmp(&b.base_dir));
-        return Ok(sources);
-    }
+    sources.sort_by(|a, b| a.basedir.cmp(&b.basedir));
 
-    Err(ImportError::UnrecognizedExportFormat(root.to_path_buf()))
+    info!(
+        "Discovered Multi-Chat TDesktop export with {} chats",
+        sources.len()
+    );
+
+    Ok(sources)
 }
 
-pub fn collect_chunk_html_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
+fn discover_json_source(root: &Path, root_json: &Path) -> ImportResult<Option<TDesktopChatSource>> {
+    let content = fs::read_to_string(root_json)?;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return Ok(None);
+    };
 
+    if let Some(chats) = value
+        .get("chats")
+        .and_then(|chats| chats.get("list"))
+        .and_then(serde_json::Value::as_array)
+    {
+        info!(
+            "Discovered Full-Account TDesktop JSON export with {} chats",
+            chats.len()
+        );
+
+        return Ok(Some(TDesktopChatSource {
+            basedir: root.to_path_buf(),
+            format: TDesktopFormat::Json,
+            files: vec![root_json.to_path_buf()],
+            title: None,
+            internal_discriminator: None,
+        }));
+    }
+
+    let Some(messages) = value.get("messages").and_then(serde_json::Value::as_array) else {
+        return Ok(None);
+    };
+
+    let title = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+
+    info!(
+        "Discovered Single-Chat TDesktop JSON export with {} messages",
+        messages.len()
+    );
+
+    Ok(Some(TDesktopChatSource {
+        basedir: root.to_path_buf(),
+        format: TDesktopFormat::Json,
+        files: vec![root_json.to_path_buf()],
+        title,
+        internal_discriminator: None,
+    }))
+}
+
+fn discover_chat_source(path: PathBuf) -> Option<TDesktopChatSource> {
+    if !path.is_dir() {
+        return None;
+    }
+
+    let internal_discriminator = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned);
+
+    let html_files = collect_html(&path);
+    if !html_files.is_empty() {
+        return Some(TDesktopChatSource {
+            basedir: path,
+            format: TDesktopFormat::Html,
+            files: html_files,
+            title: None,
+            internal_discriminator,
+        });
+    }
+
+    let result_json = path.join("result.json");
+    result_json.is_file().then(|| TDesktopChatSource {
+        basedir: path,
+        format: TDesktopFormat::Json,
+        files: vec![result_json],
+        title: None,
+        internal_discriminator,
+    })
+}
+
+pub fn collect_html(dir: &Path) -> Vec<PathBuf> {
     let primary = dir.join("messages.html");
-    if primary.is_file() {
-        files.push(primary);
-    }
+    let primary_iter = primary.is_file().then_some(primary).into_iter();
 
-    // TDesktop names sequential chunk files messages2.html, messages3.html, etc.
-    let mut idx = 2;
-    loop {
-        let chunk = dir.join(format!("messages{idx}.html"));
-        if chunk.is_file() {
-            files.push(chunk);
-            idx += 1;
-        } else {
-            break;
-        }
-    }
+    let chunks_iter = (2..)
+        .map(|idx| dir.join(format!("messages{idx}.html")))
+        .take_while(|path| path.is_file());
 
-    files
+    primary_iter.chain(chunks_iter).collect()
 }
 
 pub fn extract_zip_safely(zip_path: &Path) -> ImportResult<TempDir> {
@@ -214,7 +219,6 @@ pub fn extract_zip_safely(zip_path: &Path) -> ImportResult<TempDir> {
             .by_index(i)
             .map_err(|e| ImportError::ZipExtractionFailed(e.to_string()))?;
 
-        // Guard against Zip Slip / path traversal
         let Some(enclosed_path) = zip_file.enclosed_name() else {
             return Err(ImportError::ZipExtractionFailed(format!(
                 "Path traversal attempt in ZIP entry: {}",

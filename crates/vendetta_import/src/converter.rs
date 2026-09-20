@@ -10,7 +10,7 @@ use vendetta_storage::ArchiveDb;
 use crate::{
     discovery::{TDesktopFormat, discover_export},
     error::{ImportError, ImportResult},
-    ingest::ingest_chats_into_db,
+    ingest::ingest_chats,
     model::ImportChat,
     parser_html::parse_tdesktop_html,
     parser_json::parse_tdesktop_json,
@@ -94,7 +94,7 @@ pub fn import_tdesktop(options: &ImportOptions) -> ImportResult<ImportSummary> {
     let all_chats = parse_all_chats(&options.source_path)?;
 
     let db = ArchiveDb::open(&options.archive_path)?;
-    let resolved_media_dir = options.media_dir.clone().unwrap_or_else(|| {
+    let media_dir = options.media_dir.clone().unwrap_or_else(|| {
         options
             .archive_path
             .parent()
@@ -102,11 +102,11 @@ pub fn import_tdesktop(options: &ImportOptions) -> ImportResult<ImportSummary> {
             .join("media")
     });
 
-    let ingest_summary = ingest_chats_into_db(&db, &resolved_media_dir, &all_chats)?;
+    let ingest_summary = ingest_chats(&db, &media_dir, &all_chats)?;
 
     Ok(ImportSummary {
         archive_path: options.archive_path.clone(),
-        media_dir: resolved_media_dir,
+        media_dir,
         chats_count: ingest_summary.chats_count,
         messages_count: ingest_summary.messages_count,
         media_copied_count: ingest_summary.media_copied_count,
@@ -123,15 +123,14 @@ pub fn convert_tdesktop(options: &ConvertOptions) -> ImportResult<ConvertSummary
 
     let all_chats = parse_all_chats(&options.source_path)?;
 
-    // Allocate isolated ephemeral environment
-    let ephemeral_dir = tempfile::Builder::new()
+    let tmp_dir = tempfile::Builder::new()
         .prefix("vendetta_convert_")
         .tempdir()?;
-    let ephemeral_db_path = ephemeral_dir.path().join("ephemeral_archive.db");
-    let ephemeral_media_dir = ephemeral_dir.path().join("media");
+    let tmp_db = tmp_dir.path().join("ephemeral_archive.db");
+    let tmp_media = tmp_dir.path().join("media");
 
-    let db = ArchiveDb::open(&ephemeral_db_path)?;
-    ingest_chats_into_db(&db, &ephemeral_media_dir, &all_chats)?;
+    let db = ArchiveDb::open(&tmp_db)?;
+    ingest_chats(&db, &tmp_media, &all_chats)?;
 
     info!(
         "Ingested into ephemeral DB, running HTML exporter targeting: {}",
@@ -145,7 +144,7 @@ pub fn convert_tdesktop(options: &ConvertOptions) -> ImportResult<ConvertSummary
         theme: options.theme,
         chunk_size: options.chunk_size,
         replace: options.replace,
-        media_src_dir: Some(ephemeral_media_dir),
+        media_src_dir: Some(tmp_media),
         include_service_messages: true,
         include_deleted_messages: true,
         include_edit_history: true,

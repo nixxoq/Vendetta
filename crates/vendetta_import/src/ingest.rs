@@ -7,6 +7,7 @@ use std::{
 
 use sha2::{Digest, Sha256};
 use tracing::info;
+
 use vendetta_core::encode_hex;
 use vendetta_media::StorageLayoutManager;
 use vendetta_model::{
@@ -29,184 +30,26 @@ pub struct IngestSummary {
     pub media_skipped_count: usize,
 }
 
-pub fn ingest_chats_into_db(
+struct MediaIngestContext<'a> {
+    db: &'a ArchiveDb,
+    layout: &'a StorageLayoutManager,
+    chat_peer_id: PeerId,
+    message_id: MessageId,
+    message_date: i64,
+}
+
+pub fn ingest_chats(
     db: &ArchiveDb,
     media_dir: &Path,
     chats: &[ImportChat],
 ) -> ImportResult<IngestSummary> {
-    let mut summary = IngestSummary::default();
     let layout = StorageLayoutManager::new(media_dir);
     layout.ensure_dirs()?;
 
+    let mut summary = IngestSummary::default();
+
     for chat in chats {
-        summary.chats_count += 1;
-
-        // 1. Ingest chat peer
-        db.upsert_peer(&chat.to_peer_record())?;
-
-        // 2. Ingest senders
-        let mut seen_senders = HashSet::new();
-        for msg in &chat.messages {
-            if let Some(s_id) = msg.sender_id
-                && seen_senders.insert(s_id)
-            {
-                let sender_record = PeerRecord {
-                    peer_id: s_id,
-                    peer_type: PeerType::User,
-                    name: msg.sender_name.clone(),
-                    username: None,
-                    phone: None,
-                    raw_tl: None,
-                    updated_at: msg.date,
-                };
-                db.upsert_peer(&sender_record)?;
-            }
-        }
-
-        // 3. Ingest messages in batches
-        let existing_ids: HashSet<_> = chat.messages.iter().map(|m| m.message_id).collect();
-        let records: Vec<_> = chat
-            .messages
-            .iter()
-            .map(|m| m.to_message_record(chat.peer_id))
-            .collect();
-
-        db.insert_messages_batch(&records)?;
-        summary.messages_count += records.len();
-
-        // 4. Ingest media & links
-        for msg in &chat.messages {
-            for (pos, media_item) in msg.media.iter().enumerate() {
-                if media_item.is_skipped {
-                    let media_id = format!(
-                        "tdesktop_skipped_{}_{}_{}",
-                        chat.peer_id.raw(),
-                        msg.message_id.raw(),
-                        pos
-                    );
-                    let rec = skipped_media_record(
-                        media_id,
-                        media_item,
-                        msg.date,
-                        "Not included in export: exceeds maximum size or missing on disk",
-                        media_item.skip_reason.unwrap_or(FilterReason::SizeAboveMax),
-                    );
-                    link_media_record(
-                        db,
-                        chat.peer_id,
-                        msg.message_id,
-                        &rec,
-                        media_item.role,
-                        pos,
-                    )?;
-                    summary.media_skipped_count += 1;
-                    continue;
-                }
-
-                if let Some(ref src_path) = media_item.source_path {
-                    if src_path.is_file() {
-                        let (sha256, size) = compute_file_sha256_and_size(src_path)?;
-                        let rel_path = StorageLayoutManager::content_addressed_rel_path(
-                            &sha256,
-                            media_item.file_name.as_deref(),
-                        );
-                        let dest_path = layout.resolve_canonical_path(&rel_path);
-
-                        if let Some(parent) = dest_path.parent() {
-                            fs::create_dir_all(parent)?;
-                        }
-
-                        if !dest_path.is_file() {
-                            fs::copy(src_path, &dest_path)?;
-                            summary.media_copied_count += 1;
-                        }
-
-                        let media_id = format!("tdesktop_{sha256}");
-                        let rec = MediaRecord {
-                            media_id,
-                            kind: media_item.kind,
-                            mime_type: media_item.mime_type.clone(),
-                            size_bytes: Some(size),
-                            file_name: media_item.file_name.clone(),
-                            size_type: None,
-                            width: None,
-                            height: None,
-                            dc_id: 0,
-                            source_location_tl: None,
-                            file_reference: None,
-                            local_rel_path: Some(rel_path),
-                            sha256: Some(sha256),
-                            download_status: MediaDownloadStatus::Completed,
-                            downloaded_bytes: size,
-                            chunk_size: 524288,
-                            retry_count: 0,
-                            max_retries: 5,
-                            next_retry_at: None,
-                            claimed_at: None,
-                            worker_id: None,
-                            last_error: None,
-                            filter_decision: Some(vendetta_model::FilterDecision::Allow),
-                            filter_reason: None,
-                            policy_version: 1,
-                            verification_status: MediaVerificationStatus::Verified,
-                            created_at: msg.date,
-                            updated_at: msg.date,
-                        };
-                        link_media_record(
-                            db,
-                            chat.peer_id,
-                            msg.message_id,
-                            &rec,
-                            media_item.role,
-                            pos,
-                        )?;
-                    } else {
-                        // File path referenced in export does not exist on disk
-                        let media_id = format!(
-                            "tdesktop_missing_{}_{}_{}",
-                            chat.peer_id.raw(),
-                            msg.message_id.raw(),
-                            pos
-                        );
-                        let rec = skipped_media_record(
-                            media_id,
-                            media_item,
-                            msg.date,
-                            "File referenced in export is missing on disk",
-                            FilterReason::Manual,
-                        );
-                        link_media_record(
-                            db,
-                            chat.peer_id,
-                            msg.message_id,
-                            &rec,
-                            media_item.role,
-                            pos,
-                        )?;
-                        summary.media_skipped_count += 1;
-                    }
-                }
-            }
-        }
-
-        // 5. Ingest replies
-        for msg in &chat.messages {
-            if let Some(target_id) = msg.reply_to_message_id {
-                let status = if existing_ids.contains(&target_id) {
-                    ReplyResolutionStatus::Resolved
-                } else {
-                    ReplyResolutionStatus::Missing
-                };
-
-                let reply_record = MessageReplyRecord {
-                    source: MessageKey::new(chat.peer_id, msg.message_id),
-                    target: MessageKey::new(chat.peer_id, target_id),
-                    top_message_id: None,
-                    resolution_status: status,
-                };
-                db.upsert_reply(&reply_record)?;
-            }
-        }
+        ingest_chat(db, &layout, chat, &mut summary)?;
     }
 
     info!(
@@ -218,6 +61,219 @@ pub fn ingest_chats_into_db(
     );
 
     Ok(summary)
+}
+
+fn ingest_chat(
+    db: &ArchiveDb,
+    layout: &StorageLayoutManager,
+    chat: &ImportChat,
+    summary: &mut IngestSummary,
+) -> ImportResult<()> {
+    db.upsert_peer(&chat.to_peer_record())?;
+
+    ingest_senders(db, chat)?;
+    ingest_messages(db, chat, summary)?;
+    ingest_media(db, layout, chat, summary)?;
+    ingest_replies(db, chat)?;
+
+    summary.chats_count += 1;
+
+    Ok(())
+}
+
+fn ingest_senders(db: &ArchiveDb, chat: &ImportChat) -> ImportResult<()> {
+    let mut seen_senders = HashSet::new();
+
+    for msg in &chat.messages {
+        let Some(sender_id) = msg.sender_id else {
+            continue;
+        };
+
+        if seen_senders.insert(sender_id) {
+            db.upsert_peer(&PeerRecord {
+                peer_id: sender_id,
+                peer_type: PeerType::User,
+                name: msg.sender_name.clone(),
+                username: None,
+                phone: None,
+                raw_tl: None,
+                updated_at: msg.date,
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn ingest_messages(
+    db: &ArchiveDb,
+    chat: &ImportChat,
+    summary: &mut IngestSummary,
+) -> ImportResult<()> {
+    let records = chat
+        .messages
+        .iter()
+        .map(|message| message.to_message_record(chat.peer_id))
+        .collect::<Vec<_>>();
+
+    db.insert_messages_batch(&records)?;
+    summary.messages_count += records.len();
+
+    Ok(())
+}
+
+fn ingest_media(
+    db: &ArchiveDb,
+    layout: &StorageLayoutManager,
+    chat: &ImportChat,
+    summary: &mut IngestSummary,
+) -> ImportResult<()> {
+    for message in &chat.messages {
+        let ctx = MediaIngestContext {
+            db,
+            layout,
+            chat_peer_id: chat.peer_id,
+            message_id: message.message_id,
+            message_date: message.date,
+        };
+
+        for (position, media_item) in message.media.iter().enumerate() {
+            ingest_media_item(&ctx, position, media_item, summary)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn ingest_media_item(
+    ctx: &MediaIngestContext<'_>,
+    position: usize,
+    media_item: &ImportMediaItem,
+    summary: &mut IngestSummary,
+) -> ImportResult<()> {
+    if media_item.is_skipped {
+        let media_id = format!(
+            "tdesktop_skipped_{}_{}_{}",
+            ctx.chat_peer_id.raw(),
+            ctx.message_id.raw(),
+            position
+        );
+
+        let record = skipped_media_record(
+            media_id,
+            media_item,
+            ctx.message_date,
+            "Not included in export: exceeds maximum size or missing on disk",
+            media_item.skip_reason.unwrap_or(FilterReason::SizeAboveMax),
+        );
+
+        link_media_record(ctx, &record, media_item.role, position)?;
+        summary.media_skipped_count += 1;
+
+        return Ok(());
+    }
+
+    let Some(source_path) = media_item.source_path.as_deref() else {
+        return Ok(());
+    };
+
+    if !source_path.is_file() {
+        let media_id = format!(
+            "tdesktop_missing_{}_{}_{}",
+            ctx.chat_peer_id.raw(),
+            ctx.message_id.raw(),
+            position
+        );
+
+        let record = skipped_media_record(
+            media_id,
+            media_item,
+            ctx.message_date,
+            "File referenced in export is missing on disk",
+            FilterReason::Manual,
+        );
+
+        link_media_record(ctx, &record, media_item.role, position)?;
+        summary.media_skipped_count += 1;
+
+        return Ok(());
+    }
+
+    let (sha256, size) = compute_file(source_path)?;
+    let rel_path =
+        StorageLayoutManager::content_addressed_rel_path(&sha256, media_item.file_name.as_deref());
+    let dest_path = ctx.layout.resolve_canonical_path(&rel_path);
+
+    if let Some(parent) = dest_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    if !dest_path.is_file() {
+        fs::copy(source_path, &dest_path)?;
+        summary.media_copied_count += 1;
+    }
+
+    let record = MediaRecord {
+        media_id: format!("tdesktop_{sha256}"),
+        kind: media_item.kind,
+        mime_type: media_item.mime_type.clone(),
+        size_bytes: Some(size),
+        file_name: media_item.file_name.clone(),
+        size_type: None,
+        width: None,
+        height: None,
+        dc_id: 0,
+        source_location_tl: None,
+        file_reference: None,
+        local_rel_path: Some(rel_path),
+        sha256: Some(sha256),
+        download_status: MediaDownloadStatus::Completed,
+        downloaded_bytes: size,
+        chunk_size: 524288,
+        retry_count: 0,
+        max_retries: 5,
+        next_retry_at: None,
+        claimed_at: None,
+        worker_id: None,
+        last_error: None,
+        filter_decision: Some(vendetta_model::FilterDecision::Allow),
+        filter_reason: None,
+        policy_version: 1,
+        verification_status: MediaVerificationStatus::Verified,
+        created_at: ctx.message_date,
+        updated_at: ctx.message_date,
+    };
+
+    link_media_record(ctx, &record, media_item.role, position)
+}
+
+fn ingest_replies(db: &ArchiveDb, chat: &ImportChat) -> ImportResult<()> {
+    let existing_ids = chat
+        .messages
+        .iter()
+        .map(|message| message.message_id)
+        .collect::<HashSet<_>>();
+
+    for message in &chat.messages {
+        let Some(target_id) = message.reply_to_message_id else {
+            continue;
+        };
+
+        let reply_record = MessageReplyRecord {
+            source: MessageKey::new(chat.peer_id, message.message_id),
+            target: MessageKey::new(chat.peer_id, target_id),
+            top_message_id: None,
+            resolution_status: if existing_ids.contains(&target_id) {
+                ReplyResolutionStatus::Resolved
+            } else {
+                ReplyResolutionStatus::Missing
+            },
+        };
+
+        db.upsert_reply(&reply_record)?;
+    }
+
+    Ok(())
 }
 
 fn skipped_media_record(
@@ -249,7 +305,7 @@ fn skipped_media_record(
         next_retry_at: None,
         claimed_at: None,
         worker_id: None,
-        last_error: Some(last_error.to_string()),
+        last_error: Some(last_error.to_owned()),
         filter_decision: Some(vendetta_model::FilterDecision::Skip),
         filter_reason: Some(skip_reason),
         policy_version: 1,
@@ -260,37 +316,38 @@ fn skipped_media_record(
 }
 
 fn link_media_record(
-    db: &ArchiveDb,
-    chat_peer_id: PeerId,
-    msg_id: MessageId,
-    rec: &MediaRecord,
+    ctx: &MediaIngestContext<'_>,
+    record: &MediaRecord,
     role: MediaRole,
     position: usize,
 ) -> ImportResult<()> {
-    db.insert_or_update_media(rec)?;
-    let join = MessageMediaJoin {
-        key: MessageKey::new(chat_peer_id, msg_id),
-        media_id: rec.media_id.clone(),
+    ctx.db.insert_or_update_media(record)?;
+
+    ctx.db.link_message_media(&MessageMediaJoin {
+        key: MessageKey::new(ctx.chat_peer_id, ctx.message_id),
+        media_id: record.media_id.clone(),
         role,
         position: position as i32,
-    };
-    db.link_message_media(&join)?;
+    })?;
+
     Ok(())
 }
 
-fn compute_file_sha256_and_size(path: &Path) -> io::Result<(String, i64)> {
+fn compute_file(path: &Path) -> io::Result<(String, i64)> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
-    let mut buf = [0u8; 65536];
+    let mut buffer = [0u8; 65_536];
     let mut total_bytes = 0i64;
 
     loop {
-        let n = file.read(&mut buf)?;
-        if n == 0 {
+        let bytes_read = file.read(&mut buffer)?;
+
+        if bytes_read == 0 {
             break;
         }
-        hasher.update(&buf[..n]);
-        total_bytes += n as i64;
+
+        hasher.update(&buffer[..bytes_read]);
+        total_bytes += bytes_read as i64;
     }
 
     Ok((encode_hex(&hasher.finalize()), total_bytes))

@@ -5,55 +5,57 @@ pub const SYNTHETIC_CHAT_ID_BASE: i64 = -8_000_000_000_000_000_000;
 pub const SYNTHETIC_SENDER_ID_BASE: i64 = -6_000_000_000_000_000_000;
 pub const SYNTHETIC_MODULO: i64 = 1_000_000_000_000_000;
 
-/// Generate a deterministic synthetic `PeerId` for an imported chat without native MTProto ID.
-///
-/// Identity is derived exclusively from logical chat metadata (normalized title, peer type,
-/// and optional internal export discriminator such as a relative subfolder token).
-/// Does NOT couple to host filesystem paths.
 pub fn generate_synthetic_chat_id(
     title: &str,
     peer_type: PeerType,
     discriminator: Option<&str>,
 ) -> PeerId {
-    let mut hasher = Sha256::new();
-    hasher.update(b"vendetta:synthetic:chat:");
-    hasher.update(title.trim().as_bytes());
-    hasher.update(b":");
-    hasher.update(peer_type.as_ref().as_bytes());
-    hasher.update(b":");
-    if let Some(disc) = discriminator {
-        hasher.update(disc.trim().as_bytes());
-    }
+    let disc_bytes = discriminator.map(|d| d.trim().as_bytes());
+    let parts: [&[u8]; 6] = [
+        b"vendetta:synthetic:chat:",
+        title.trim().as_bytes(),
+        b":",
+        peer_type.as_ref().as_bytes(),
+        b":",
+        disc_bytes.unwrap_or_default(),
+    ];
 
-    let hash = hasher.finalize();
-    let num = u64::from_be_bytes(hash[0..8].try_into().unwrap_or_default());
-    let offset = (num % (SYNTHETIC_MODULO as u64)) as i64;
-    PeerId::new(SYNTHETIC_CHAT_ID_BASE - offset)
+    hash_parts_to_synthetic_id(SYNTHETIC_CHAT_ID_BASE, &parts)
 }
 
-/// Generate a deterministic synthetic `PeerId` for an imported sender without native MTProto ID.
-///
-/// Scoped to the parent chat ID and strongest available stable sender markers
-/// (e.g. sender name and userpic initials or style class).
 pub fn generate_synthetic_sender_id(
     chat_id: PeerId,
     sender_name: &str,
     userpic_marker: Option<&str>,
 ) -> PeerId {
-    let mut hasher = Sha256::new();
-    hasher.update(b"vendetta:synthetic:sender:");
-    hasher.update(chat_id.raw().to_be_bytes());
-    hasher.update(b":");
-    hasher.update(sender_name.trim().as_bytes());
-    hasher.update(b":");
-    if let Some(marker) = userpic_marker {
-        hasher.update(marker.trim().as_bytes());
-    }
+    let chat_id_bytes = chat_id.raw().to_be_bytes();
+    let marker_bytes = userpic_marker.map(|m| m.trim().as_bytes());
+    let parts: [&[u8]; 6] = [
+        b"vendetta:synthetic:sender:",
+        &chat_id_bytes,
+        b":",
+        sender_name.trim().as_bytes(),
+        b":",
+        marker_bytes.unwrap_or_default(),
+    ];
+
+    hash_parts_to_synthetic_id(SYNTHETIC_SENDER_ID_BASE, &parts)
+}
+
+fn hash_parts_to_synthetic_id(base: i64, parts: &[&[u8]]) -> PeerId {
+    let hasher = parts.iter().fold(Sha256::new(), |mut acc, part| {
+        acc.update(part);
+        acc
+    });
 
     let hash = hasher.finalize();
-    let num = u64::from_be_bytes(hash[0..8].try_into().unwrap_or_default());
+    let num = u64::from_be_bytes(
+        hash.get(..8)
+            .and_then(|s| s.try_into().ok())
+            .unwrap_or_default(),
+    );
     let offset = (num % (SYNTHETIC_MODULO as u64)) as i64;
-    PeerId::new(SYNTHETIC_SENDER_ID_BASE - offset)
+    PeerId::new(base - offset)
 }
 
 #[cfg(test)]
@@ -61,7 +63,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn synthetic_ids_are_deterministic_and_within_namespace() {
+    fn synth_1() {
         let chat_id_1 = generate_synthetic_chat_id("Test Chat", PeerType::User, None);
         let chat_id_2 = generate_synthetic_chat_id("Test Chat", PeerType::User, None);
         assert_eq!(chat_id_1, chat_id_2);
@@ -78,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn distinct_synthetic_fixture_identities_produce_distinct_ids() {
+    fn synth_2_dist() {
         let chat_a = generate_synthetic_chat_id("Chat A", PeerType::User, None);
         let chat_b = generate_synthetic_chat_id("Chat B", PeerType::User, None);
         assert_ne!(chat_a, chat_b);
