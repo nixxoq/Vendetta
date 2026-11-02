@@ -56,5 +56,4 @@ See [docs/cli.md](docs/cli.md) for the complete CLI reference and other options.
 
 - [Project Architecture](docs/architecture.md)
 - [Database Design](docs/database.md). SQLite schema, migrations, WAL mode, and FTS5 search index
-- [MTProto](docs/mtproto.md). Some info about mtproto, containing various parameters, chunk rules, error recovery, and invariants
 
