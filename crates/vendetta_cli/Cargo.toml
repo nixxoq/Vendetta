@@ -9,10 +9,6 @@ authors.workspace = true
 name = "vendetta"
 path = "src/main.rs"
 
-[lib]
-name = "vendetta_cli"
-path = "src/lib.rs"
-
 [features]
 default = []
 
@@ -37,9 +33,6 @@ rpassword.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-grammers-session.workspace = true
 assert_cmd.workspace = true
 predicates.workspace = true
 serde_json.workspace = true
-rusqlite.workspace = true
-sha2.workspace = true
