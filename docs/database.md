@@ -1,12 +1,6 @@
-# Database Design & Persistence Specification
-
-Vendetta uses SQLite 3 as the canonical, authoritative archive database. All subsequent views (static HTML, search indexes, export manifests) are derived from SQLite records.
-
----
+# Database Design
 
 ## 1. Concurrency Architecture
-
-The database engine enforces strict separation of read and write paths using SQLite Write-Ahead Logging (WAL):
 
 ```text
                      SQLite Database (WAL Mode)
@@ -22,25 +16,10 @@ The database engine enforces strict separation of read and write paths using SQL
      └── Sync cursor updates           └── Reply graph traversal
 ```
 
-### Concurrency Invariants
-* **Non-Blocking WAL Invariant**: Read transactions execute concurrently without blocking or being blocked by active write transactions.
-* **Single-Writer Serialization**: All mutations pass through a single dedicated write worker thread via bounded channels (`tokio::sync::mpsc`), preventing `SQLITE_BUSY` contention.
-* **Streaming Cursors**: Large result sets are iterated using chunked cursors (500–5,000 rows per query) rather than materializing entire datasets into memory.
-* **Pragmas**:
-  ```sql
-  PRAGMA journal_mode = WAL;
-  PRAGMA synchronous = NORMAL;
-  PRAGMA foreign_keys = ON;
-  PRAGMA busy_timeout = 30000;
-  ```
 
----
+## 2. Structures
 
-## 2. Relational Schema Specification
-
-### Message Entity (`messages`)
-
-Message identity is strictly composite: `(peer_id, message_id)`.
+### Message entity
 
 ```sql
 CREATE TABLE messages (
@@ -70,16 +49,14 @@ CREATE INDEX idx_messages_grouped ON messages(grouped_id) WHERE grouped_id IS NO
 CREATE INDEX idx_messages_reply_target ON messages(peer_id, reply_to_msg_id) WHERE reply_to_msg_id IS NOT NULL;
 ```
 
-### Message Lifecycle States
-* `active`: Standard published message.
-* `edited`: Message modified after initial dispatch (revisions stored in `message_revisions`).
-* `deleted`: Confirmed deletion detected during incremental reconciliation.
-* `empty`: Empty tombstone or unavailable message placeholder (`messageEmpty#90a6ca84`).
-* `inaccessible`: Message restricted or blocked by channel permissions.
+### Message states
+* `active` - Standard message.
+* `edited` - Message modified after initial dispatch (revisions stored in `message_revisions`).
+* `deleted` - Deleted message (detected during incremental sync)
+* `empty` - Empty/unavailable message placeholder (`messageEmpty#90a6ca84`).
+* `inaccessible` - Message restricted or blocked
 
-### Message Revisions (`message_revisions`)
-
-Preserves historical edits for messages when available:
+### Message revisions
 
 ```sql
 CREATE TABLE message_revisions (
@@ -96,7 +73,7 @@ CREATE TABLE message_revisions (
 );
 ```
 
-### Reply Relationships (`message_replies`)
+### Message replies
 
 ```sql
 CREATE TABLE message_replies (
@@ -113,7 +90,7 @@ CREATE TABLE message_replies (
 
 * `resolution_status` values: `resolved`, `context_only`, `missing`, `deleted`, `inaccessible`, `not_requested`.
 
-### Media Objects (`media_objects`) & Message Association (`message_media`)
+### Media objects
 
 ```sql
 CREATE TABLE media_objects (
@@ -143,9 +120,9 @@ CREATE TABLE message_media (
 );
 ```
 
-### Full-Text Search (`messages_fts`)
+### Full-text search
 
-Canonical full-text search is implemented using SQLite FTS5 with `unicode61` tokenization:
+**Note:** Full-text search is implemented using SQLite FTS5 with `unicode61` tokenization
 
 ```sql
 CREATE VIRTUAL TABLE messages_fts USING fts5(
@@ -159,18 +136,14 @@ CREATE VIRTUAL TABLE messages_fts USING fts5(
 );
 ```
 
-Automated database triggers (`AFTER INSERT`, `AFTER UPDATE`, `AFTER DELETE`) maintain FTS5 synchronization for searchable message states (`active`, `edited`).
-
 ---
 
 ## 3. Schema Migrations
 
-Database versioning is tracked via the `schema_migrations` table (`CURRENT_SCHEMA_VERSION = 5`).
-
 | Version | Migration File | Description |
 | :---: | :--- | :--- |
-| **`1`** | `0001_initial_schema.sql` | Baseline schema: `schema_migrations`, `peers`, `messages`, `message_revisions`, `message_replies`, `media`, `message_media`. |
-| **`2`** | `0002_incremental_sync.sql` | Delta synchronization: `sync_state_common`, `sync_state_channels`, `sync_events_queue`, `sync_integrity_reports`, `unsupported_events`. |
-| **`3`** | `0003_media_engine.sql` | Content-addressed media storage: `media_objects`, worker lease claiming, collision resolution. |
-| **`4`** | `0004_deletion_provenance.sql` | Versioned deletion reconciliation provenance fields and tombstone metrics. |
-| **`5`** | `0005_fts5_search.sql` | SQLite FTS5 index (`messages_fts`) and automatic lifecycle triggers. |
+| **`1`** | `0001_initial_schema.sql` | Initial schema |
+| **`2`** | `0002_incremental_sync.sql` | added delta synchronization ( `sync_state_common`, `sync_state_channels`, `sync_events_queue`, `sync_integrity_reports`, `unsupported_events`) |
+| **`3`** | `0003_media_engine.sql` | Added `media_objects` |
+| **`4`** | `0004_deletion_provenance.sql` | Mark deleted/edited messages |
+| **`5`** | `0005_fts5_search.sql` | FTS5 search |
