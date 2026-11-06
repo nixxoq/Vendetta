@@ -98,7 +98,7 @@ Fetches history into SQLite and reconciles updates. Repeating the command resume
 | `--from <DATE>` | Fetch history starting at this date. |
 | `--to <DATE>` | Fetch history through this date. |
 
-Dates accept `YYYY-MM-DD` or RFC3339 timestamps. A date without a time starts at midnight UTC for `--from` and ends at 23:59:59 UTC for `--to`. Supplying either bound switches to a historical backfill for that range; it does not run the full incremental reconciliation or advance the full-history cursor.
+**Note:** Dates accept `YYYY-MM-DD` or RFC3339 timestamps. 
 
 ```sh
 vendetta sync --peer-type channel --limit 50
@@ -125,8 +125,6 @@ Normally downloads profile pictures, custom emoji reactions, and queued message 
 | `--max-workers <N>` | Maximum attachment download concurrency. Default: `8`. |
 | `--max-dc-workers <N>` | Maximum concurrent attachment downloads per Telegram data center. Default: `2`. |
 | `--initial-workers <N>` | Attachment download concurrency at startup. Default: `2`. |
-
-Attachment filters do not restrict the separate profile-picture and reaction passes. Choose one of `--avatars-only` and `--reactions-only`; if both are supplied, the reaction pass takes precedence.
 
 ```sh
 vendetta download-media --backfill --photos-only --max-size-mb 20

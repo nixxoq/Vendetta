@@ -7,7 +7,7 @@ Vendetta is a, currently, command-line interface designed to replace the export 
 ## Features
 
 - UI:
-  * Rendering custom emojis (you need to synchronize reactions)
+  * Rendering custom emojis (you need to synchronize reactions first)
   * Viewing forum messages just like in Telegram
   * Telegram-like UI (compact mode available)
 - Incremental synchronization using `updates.getDifference` and `updates.getChannelDifference`
