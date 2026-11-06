@@ -1,13 +1,18 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::io::{self, BufRead, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tracing::info;
 use vendetta_model::PeerRecord;
-use vendetta_tg_adapter::GrammersTelegramAdapter;
-use vendetta_tg_adapter::auth::AuthPrompt;
-use vendetta_tg_adapter::session::FileSession;
+use vendetta_tg_adapter::{GrammersTelegramAdapter, auth::AuthPrompt, session::FileSession};
+
+use crate::{
+    client::connect_adapter,
+    config::CliConfig,
+    prompt::{prompt_confirm, prompt_line, prompt_secret},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStatusOutput {
@@ -24,39 +29,6 @@ pub struct AuthUserSummary {
     pub name: Option<String>,
     pub username: Option<String>,
     pub phone: Option<String>,
-}
-
-// TODO: i need to find a better option than this crap I quickly wrote
-pub fn prompt_line(prompt: &str) -> io::Result<String> {
-    eprint!("{prompt}");
-    io::stderr().flush()?;
-    let stdin = io::stdin();
-    let mut line = String::new();
-    stdin.lock().read_line(&mut line)?;
-    Ok(line.trim().to_string())
-}
-
-// TODO: same todo as in :29
-pub fn prompt_secret(prompt: &str) -> io::Result<String> {
-    eprint!("{prompt}");
-    io::stderr().flush()?;
-    let secret = rpassword::read_password()?;
-    Ok(secret.trim().to_string())
-}
-
-pub async fn connect_adapter(
-    api_id: i32,
-    api_hash: &str,
-    session_path: &Path,
-) -> Result<Arc<GrammersTelegramAdapter>> {
-    let session = FileSession::open(session_path)
-        .with_context(|| format!("Failed to open session file at {}", session_path.display()))?;
-
-    let adapter = GrammersTelegramAdapter::connect(api_id, api_hash, session)
-        .await
-        .context("Failed to connect MTProto client to Telegram network")?;
-
-    Ok(Arc::new(adapter))
 }
 
 pub async fn run_auth(
@@ -210,33 +182,23 @@ pub async fn run_auth(
             user_summary.phone.unwrap_or_else(|| "-".to_string())
         );
 
-        use std::io::IsTerminal;
-        if std::io::stdin().is_terminal() {
-            let target_config_path =
-                crate::config::CliConfig::resolve_write_config_path(explicit_config_path);
-            let existing = crate::config::CliConfig::load_file_or_default(&target_config_path);
-            let already_saved = existing.api_id == Some(api_id)
-                && existing.api_hash.as_deref() == Some(api_hash.as_str());
+        let target_config_path = CliConfig::resolve_write_config_path(explicit_config_path);
+        let existing = CliConfig::load_file_or_default(&target_config_path);
+        let already_saved = existing.api_id == Some(api_id)
+            && existing.api_hash.as_deref() == Some(api_hash.as_str());
 
-            if !already_saved {
-                let ans = prompt_line("\nSave API credentials to Vendetta config? [Y/n] ")?;
-                let ans_lower = ans.trim().to_lowercase();
-                if ans_lower.is_empty() || ans_lower == "y" || ans_lower == "yes" {
-                    let mut updated = existing;
-                    updated.api_id = Some(api_id);
-                    updated.api_hash = Some(api_hash);
-                    updated.save_to_file(&target_config_path)?;
-                    println!("API credentials saved to {}", target_config_path.display());
-                }
-            }
+        if !already_saved && prompt_confirm("\nSave API credentials to Vendetta config?", true)? {
+            let mut updated = existing;
+            updated.api_id = Some(api_id);
+            updated.api_hash = Some(api_hash);
+            updated.save_to_file(&target_config_path)?;
+            println!("API credentials saved to {}", target_config_path.display());
         }
     }
 
     Ok(())
 }
 
-/// Checks and reports authorization status
-/// Samilar to run_auth func
 pub async fn run_auth_status(
     api_id_opt: Option<i32>,
     api_hash_opt: Option<String>,

@@ -1,17 +1,9 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 use vendetta_model::PeerType;
-use vendetta_tg_adapter::TelegramAdapter;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DialogListOutput {
-    pub schema_version: u32,
-    pub command: String,
-    pub status: String,
-    pub count: usize,
-    pub dialogs: Vec<DialogItemSummary>,
-}
+use crate::client::resolve_adapter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DialogItemSummary {
@@ -54,33 +46,26 @@ fn print_table(dialogs: &[DialogItemSummary]) {
 }
 
 fn print_json(dialogs: &[DialogItemSummary]) -> Result<()> {
-    #[derive(Serialize)]
-    struct OutputView<'a> {
-        schema_version: u32,
-        command: &'static str,
-        status: &'static str,
-        count: usize,
-        dialogs: &'a [DialogItemSummary],
-    }
-
-    let out = OutputView {
-        schema_version: 1,
-        command: "dialogs",
-        status: "completed",
-        count: dialogs.len(),
-        dialogs,
-    };
-
+    let out = serde_json::json!({
+        "schema_version": 1,
+        "command": "dialogs",
+        "status": "completed",
+        "count": dialogs.len(),
+        "dialogs": dialogs,
+    });
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }
 
-pub async fn run_dialogs_with_adapter(
-    adapter: Arc<dyn TelegramAdapter>,
+pub async fn run_dialogs(
+    api_id: Option<i32>,
+    api_hash: Option<String>,
+    session_path: &Path,
     limit: Option<usize>,
     peer_type_filter: Option<PeerType>,
     json: bool,
 ) -> Result<Vec<DialogItemSummary>> {
+    let adapter = resolve_adapter(api_id, api_hash, session_path).await?;
     let raw_dialogs = adapter
         .get_dialogs()
         .await
@@ -110,16 +95,4 @@ pub async fn run_dialogs_with_adapter(
     }
 
     Ok(dialogs)
-}
-
-pub async fn run_dialogs(
-    api_id: Option<i32>,
-    api_hash: Option<String>,
-    session_path: &Path,
-    limit: Option<usize>,
-    peer_type_filter: Option<PeerType>,
-    json: bool,
-) -> Result<Vec<DialogItemSummary>> {
-    let adapter = crate::adapter_factory::resolve_adapter(api_id, api_hash, session_path).await?;
-    run_dialogs_with_adapter(adapter, limit, peer_type_filter, json).await
 }

@@ -1,660 +1,23 @@
-pub mod adapter_factory;
-pub mod auth;
-pub mod config;
-pub mod dialogs;
-pub mod exit_codes;
-pub mod media;
-pub mod progress;
-pub mod render;
-pub mod sync;
+mod args;
+mod auth;
+mod client;
+mod config;
+mod dialogs;
+mod media;
+mod progress;
+mod prompt;
+mod render;
+mod sync;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand, ValueEnum};
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use vendetta_model::{MediaFilterPolicy, PeerId, PeerType};
-use vendetta_render::{ExportOptions, MediaMode, PresentationMode, ThemeMode};
+use clap::Parser;
+use std::{path::Path, sync::Arc};
+use vendetta_model::{MediaFilterPolicy, PeerId};
+use vendetta_render::ExportOptions;
 use vendetta_storage::ArchiveDb;
 
-use crate::{config::CliConfig, exit_codes::*};
-
-#[derive(Parser, Debug)]
-#[command(
-    name = "vendetta",
-    author = "NixxO",
-    version = env!("CARGO_PKG_VERSION"),
-    about = "Telegram chats archive & HTML exporter",
-    long_about = "A command-line tool designed to quickly export, index, verify and generate offline HTML documents of chat histories from a Telegram account"
-)]
-pub struct Cli {
-    /// Optional path to JSON configuration file.
-    #[arg(long, global = true)]
-    pub config: Option<PathBuf>,
-
-    /// Account identifier for multi-account workspace layout.
-    #[arg(long, global = true)]
-    pub account: Option<String>,
-
-    /// Suppress informational progress output.
-    #[arg(short = 'q', long, global = true)]
-    pub quiet: bool,
-
-    /// Output report or results as structured machine-readable JSON.
-    #[arg(long, global = true)]
-    pub json: bool,
-
-    /// Disable ANSI color output.
-    #[arg(long, global = true)]
-    pub no_color: bool,
-
-    #[command(subcommand)]
-    pub command: Commands,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum Commands {
-    /// Authenticate with Telegram, check authorization status, or log out.
-    #[command(name = "auth")]
-    Auth {
-        #[command(subcommand)]
-        subcommand: Option<AuthSubcommands>,
-
-        /// Telegram API ID (numeric).
-        #[arg(long, global = true)]
-        api_id: Option<i32>,
-
-        /// Telegram API Hash (hex string).
-        #[arg(long, global = true)]
-        api_hash: Option<String>,
-
-        /// Explicit path to session file.
-        #[arg(long, global = true)]
-        session: Option<PathBuf>,
-
-        /// Phone number in international format (+1234567890).
-        #[arg(long, global = true)]
-        phone: Option<String>,
-
-        /// Force re-authentication even if already authorized.
-        #[arg(long, global = true)]
-        force: bool,
-    },
-
-    /// Discover and list accessible Telegram chats, groups, and channels.
-    #[command(name = "dialogs")]
-    Dialogs {
-        /// Telegram API ID (numeric).
-        #[arg(long)]
-        api_id: Option<i32>,
-
-        /// Telegram API Hash (hex string).
-        #[arg(long)]
-        api_hash: Option<String>,
-
-        /// Explicit path to session file.
-        #[arg(long)]
-        session: Option<PathBuf>,
-
-        /// Maximum number of dialogs to display.
-        #[arg(long)]
-        limit: Option<usize>,
-
-        /// Filter by peer type.
-        #[arg(long, value_enum)]
-        peer_type: Option<CliPeerType>,
-    },
-
-    /// Synchronize Telegram account message history and incremental deltas into SQLite archive.
-    #[command(name = "sync")]
-    Sync {
-        /// Path to SQLite archive file.
-        #[arg(short, long)]
-        archive: Option<PathBuf>,
-
-        /// Telegram API ID (numeric).
-        #[arg(long)]
-        api_id: Option<i32>,
-
-        /// Telegram API Hash (hex string).
-        #[arg(long)]
-        api_hash: Option<String>,
-
-        /// Explicit path to session file.
-        #[arg(long)]
-        session: Option<PathBuf>,
-
-        /// Specific peer IDs to synchronize (comma-separated or repeated). Explicit target override: type filters and dialog limit do not restrict this explicit peer list.
-        #[arg(long, value_delimiter = ',')]
-        peers: Option<Vec<i64>>,
-
-        /// Filter to include specific dialog peer types (e.g. user, group, channel).
-        #[arg(long, value_enum)]
-        peer_type: Option<CliPeerType>,
-
-        /// Exclude specific dialog peer types.
-        #[arg(long, value_enum)]
-        exclude_peer_type: Option<CliPeerType>,
-
-        /// Maximum number of dialogs to synchronize.
-        #[arg(long)]
-        limit: Option<usize>,
-
-        /// History backfill start date (RFC3339 or YYYY-MM-DD).
-        #[arg(long = "from")]
-        from_date: Option<String>,
-
-        /// History backfill end date (RFC3339 or YYYY-MM-DD).
-        #[arg(long = "to")]
-        to_date: Option<String>,
-    },
-
-    /// Download pending media items from Telegram into content-addressable storage.
-    #[command(name = "download-media")]
-    DownloadMedia {
-        /// Path to SQLite archive file.
-        #[arg(short, long)]
-        archive: Option<PathBuf>,
-
-        /// Path to root media storage directory.
-        #[arg(long)]
-        media_dir: Option<PathBuf>,
-
-        /// Telegram API ID (numeric).
-        #[arg(long)]
-        api_id: Option<i32>,
-
-        /// Telegram API Hash (hex string).
-        #[arg(long)]
-        api_hash: Option<String>,
-
-        /// Explicit path to session file.
-        #[arg(long)]
-        session: Option<PathBuf>,
-
-        /// Automatically backfill media objects from archived messages before downloading.
-        #[arg(long, default_value_t = false)]
-        backfill: bool,
-
-        /// Synchronize ONLY peer and chat profile avatars, skipping message attachments.
-        #[arg(long, default_value_t = false)]
-        avatars_only: bool,
-
-        /// Synchronize ONLY custom emoji reactions, skipping message attachments and avatars.
-        #[arg(long, default_value_t = false)]
-        reactions_only: bool,
-
-        /// Download ONLY photos, skipping videos, documents, audio, and animations.
-        #[arg(long, default_value_t = false)]
-        photos_only: bool,
-
-        /// Skip downloading videos and video notes.
-        #[arg(long, default_value_t = false)]
-        skip_videos: bool,
-
-        /// Maximum media file size in megabytes to download (e.g. 20 for 20MB).
-        #[arg(long)]
-        max_size_mb: Option<i64>,
-
-        /// Minimum worker concurrency.
-        #[arg(long, default_value_t = 1)]
-        min_workers: usize,
-
-        /// Maximum worker concurrency.
-        #[arg(long, default_value_t = 8)]
-        max_workers: usize,
-
-        /// Maximum worker concurrency per Data Center.
-        #[arg(long, default_value_t = 2)]
-        max_dc_workers: usize,
-
-        /// Initial worker concurrency.
-        #[arg(long, default_value_t = 2)]
-        initial_workers: usize,
-    },
-
-    /// Export canonical SQLite archive into a self-contained static HTML archive.
-    #[command(name = "export-html")]
-    ExportHtml {
-        /// Path to SQLite archive file (e.g. archive.db).
-        #[arg(short, long)]
-        archive: PathBuf,
-
-        /// Output directory for static HTML export.
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Visual presentation mode.
-        #[arg(long, value_enum, default_value_t = CliPresentationMode::TelegramLike)]
-        mode: CliPresentationMode,
-
-        /// Media materialization policy.
-        #[arg(long, value_enum, default_value_t = CliMediaMode::Copy)]
-        media: CliMediaMode,
-
-        /// Color theme default.
-        #[arg(long, value_enum, default_value_t = CliThemeMode::System)]
-        theme: CliThemeMode,
-
-        /// Message chunk size per HTML page.
-        #[arg(long, default_value_t = 250)]
-        chunk_size: usize,
-
-        /// Overwrite and replace output directory if it already exists.
-        #[arg(long)]
-        replace: bool,
-
-        /// Source media directory (defaults to <archive_parent>/media).
-        #[arg(long)]
-        media_dir: Option<PathBuf>,
-
-        /// Include service messages in export.
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        include_service_messages: bool,
-
-        /// Include deleted messages in export.
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        include_deleted_messages: bool,
-
-        /// Include message edit revisions in export.
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        include_edit_history: bool,
-
-        /// Build client-side search index.
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        build_search_index: bool,
-
-        /// Build date jump navigator index.
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        build_date_index: bool,
-
-        /// Disable forum and topic-aware rendering, exporting forum supergroups as a flat chronological message stream.
-        #[arg(long, default_value_t = false)]
-        disable_forum_render: bool,
-
-        /// Render export start date (RFC3339 or YYYY-MM-DD).
-        #[arg(long = "from")]
-        from_date: Option<String>,
-
-        /// Render export end date (RFC3339 or YYYY-MM-DD).
-        #[arg(long = "to")]
-        to_date: Option<String>,
-
-        /// Use sanitized human-readable chat directory names instead of peer ID tokens.
-        #[arg(long = "readable-names", default_value_t = false)]
-        readable_names: bool,
-
-        /// Page splitting strategy (messages or day).
-        #[arg(long = "split-by", value_enum, default_value_t = CliSplitBy::Messages)]
-        split_by: CliSplitBy,
-
-        /// Directory structure for day-based pages (flat or tree).
-        #[arg(long = "date-structure", value_enum, default_value_t = CliDateStructure::Flat)]
-        date_structure: CliDateStructure,
-    },
-
-    /// Verify integrity of a generated static HTML export.
-    #[command(name = "verify-html")]
-    VerifyHtml {
-        /// Path to static HTML export directory.
-        #[arg(long)]
-        html_dir: PathBuf,
-    },
-
-    /// Deeply audit and verify Telegram archive integrity, reply graph, media binaries, and static HTML export.
-    #[command(name = "verify-archive")]
-    VerifyArchive {
-        /// Path to SQLite archive file.
-        #[arg(short, long)]
-        archive: Option<PathBuf>,
-
-        /// Path to static HTML export directory.
-        #[arg(short = 'o', long = "html")]
-        html_dir: Option<PathBuf>,
-
-        /// Fast verification mode (schema, FK, basic counts; mutually exclusive with --full).
-        #[arg(long, conflicts_with = "full")]
-        fast: bool,
-
-        /// Full core database and domain verification (default; excludes optional expensive reply graph and media filesystem scans).
-        #[arg(long, conflicts_with = "fast")]
-        full: bool,
-
-        /// Scope audit to media objects and filesystem binary validation.
-        #[arg(long)]
-        media: bool,
-
-        /// Scope audit to recursive reply and thread graph traversal.
-        #[arg(long)]
-        replies: bool,
-
-        /// Scope audit to search manifest and shards.
-        #[arg(long)]
-        search: bool,
-
-        /// Custom source media directory (defaults to <archive_parent>/media).
-        #[arg(long)]
-        media_dir: Option<PathBuf>,
-
-        /// Perform full cryptographic SHA-256 rehashing on completed media binaries.
-        #[arg(long)]
-        rehash: bool,
-
-        /// Strict mode: promote any warning to a non-zero exit code (exit code 2).
-        #[arg(long)]
-        strict: bool,
-
-        /// Output report as structured machine-readable JSON.
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Plan and backfill media objects from existing messages in SQLite archive.
-    #[command(name = "backfill-media")]
-    BackfillMedia {
-        /// Path to SQLite archive file.
-        #[arg(short, long)]
-        archive: PathBuf,
-    },
-
-    /// Verify all completed media files on disk against their SQLite records.
-    #[command(name = "verify-media")]
-    VerifyMedia {
-        /// Path to SQLite archive file.
-        #[arg(short, long)]
-        archive: PathBuf,
-
-        /// Path to root media storage directory.
-        #[arg(long)]
-        media_dir: Option<PathBuf>,
-    },
-
-    /// Display media archive statistics with status breakdown.
-    #[command(name = "media-stats")]
-    MediaStats {
-        /// Path to SQLite archive file.
-        #[arg(short, long)]
-        archive: PathBuf,
-    },
-
-    /// Re-evaluate skipped media against current download filter policy.
-    #[command(name = "requeue-skipped")]
-    RequeueSkipped {
-        /// Path to SQLite archive file.
-        #[arg(short, long)]
-        archive: PathBuf,
-    },
-
-    /// Display or update persistent configuration with secrets safely redacted.
-    #[command(name = "config")]
-    Config {
-        /// Display active configuration.
-        #[arg(long)]
-        show: bool,
-
-        /// Set Telegram API ID (numeric).
-        #[arg(long)]
-        api_id: Option<i32>,
-
-        /// Set Telegram API Hash (hex string).
-        #[arg(long)]
-        api_hash: Option<String>,
-
-        /// Set default account identifier.
-        #[arg(long)]
-        account: Option<String>,
-
-        /// Set default path to SQLite archive file.
-        #[arg(long)]
-        archive: Option<PathBuf>,
-
-        /// Set default path to session file.
-        #[arg(long)]
-        session: Option<PathBuf>,
-
-        /// Set default media storage directory.
-        #[arg(long)]
-        media_dir: Option<PathBuf>,
-
-        /// Set default HTML export output directory.
-        #[arg(long)]
-        output: Option<PathBuf>,
-
-        /// Set default workspace base directory.
-        #[arg(long)]
-        base_dir: Option<PathBuf>,
-    },
-
-    /// Import external chat exports (e.g. Telegram Desktop) into a Vendetta SQLite archive.
-    #[command(name = "import")]
-    Import {
-        #[command(subcommand)]
-        subcommand: ImportSubcommands,
-    },
-
-    /// Convert external chat exports (e.g. Telegram Desktop) directly into a static HTML export.
-    #[command(name = "convert")]
-    Convert {
-        #[command(subcommand)]
-        subcommand: ConvertSubcommands,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone)]
-pub enum ImportSubcommands {
-    /// Import Telegram Desktop export (HTML or JSON) into a fresh native SQLite archive.
-    #[command(name = "tdesktop")]
-    Tdesktop {
-        /// Path to Telegram Desktop export directory or ZIP archive.
-        #[arg(short, long)]
-        source: PathBuf,
-
-        /// Destination path for fresh SQLite archive (fails if file already exists).
-        #[arg(short, long)]
-        archive: PathBuf,
-
-        /// Custom media storage directory (defaults to <archive_parent>/media).
-        #[arg(long)]
-        media_dir: Option<PathBuf>,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone)]
-pub enum ConvertSubcommands {
-    /// Convert Telegram Desktop export (HTML or JSON) directly into a static HTML export.
-    #[command(name = "tdesktop")]
-    Tdesktop {
-        /// Path to Telegram Desktop export directory or ZIP archive.
-        #[arg(short, long)]
-        source: PathBuf,
-
-        /// Output directory for static HTML export.
-        #[arg(short, long)]
-        output: PathBuf,
-
-        /// Visual presentation mode.
-        #[arg(long, value_enum, default_value_t = CliPresentationMode::TelegramLike)]
-        mode: CliPresentationMode,
-
-        /// Color theme default.
-        #[arg(long, value_enum, default_value_t = CliThemeMode::System)]
-        theme: CliThemeMode,
-
-        /// Message chunk size per HTML page.
-        #[arg(long, default_value_t = 250)]
-        chunk_size: usize,
-
-        /// Overwrite and replace output directory if it already exists.
-        #[arg(long)]
-        replace: bool,
-
-        /// Build client-side search index.
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        build_search_index: bool,
-
-        /// Build date jump navigator index.
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        build_date_index: bool,
-
-        /// Disable forum and topic-aware rendering, exporting forum supergroups as a flat chronological message stream.
-        #[arg(long, default_value_t = false)]
-        disable_forum_render: bool,
-
-        /// Render export start date (RFC3339 or YYYY-MM-DD).
-        #[arg(long = "from")]
-        from_date: Option<String>,
-
-        /// Render export end date (RFC3339 or YYYY-MM-DD).
-        #[arg(long = "to")]
-        to_date: Option<String>,
-
-        /// Use sanitized human-readable chat directory names instead of peer ID tokens.
-        #[arg(long = "readable-names", default_value_t = false)]
-        readable_names: bool,
-
-        /// Page splitting strategy (messages or day).
-        #[arg(long = "split-by", value_enum, default_value_t = CliSplitBy::Messages)]
-        split_by: CliSplitBy,
-
-        /// Directory structure for day-based pages (flat or tree).
-        #[arg(long = "date-structure", value_enum, default_value_t = CliDateStructure::Flat)]
-        date_structure: CliDateStructure,
-    },
-}
-
-#[derive(Subcommand, Debug, Clone)]
-pub enum AuthSubcommands {
-    /// Perform interactive login flow (SMS code + 2FA password). Note: QR login is deferred on current pinned Grammers client.
-    #[command(name = "login")]
-    Login,
-
-    /// Check authorization status of current session.
-    #[command(name = "status")]
-    Status,
-
-    /// Sign out remotely with Telegram server and delete local session file.
-    #[command(name = "logout")]
-    Logout {
-        /// Delete local session file only without contacting Telegram server.
-        #[arg(long)]
-        local_only: bool,
-    },
-
-    /// Shortcut alias for 'auth logout --local-only' (removes local session credentials without contacting Telegram server).
-    #[command(name = "forget")]
-    Forget,
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CliPeerType {
-    #[value(name = "user")]
-    User,
-    #[value(name = "group")]
-    Group,
-    #[value(name = "channel")]
-    Channel,
-}
-
-impl From<CliPeerType> for PeerType {
-    fn from(p: CliPeerType) -> Self {
-        match p {
-            CliPeerType::User => PeerType::User,
-            CliPeerType::Group => PeerType::Group,
-            CliPeerType::Channel => PeerType::Channel,
-        }
-    }
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CliPresentationMode {
-    #[value(name = "telegram-like")]
-    TelegramLike,
-    #[value(name = "archive-optimized")]
-    ArchiveOptimized,
-}
-
-impl From<CliPresentationMode> for PresentationMode {
-    fn from(m: CliPresentationMode) -> Self {
-        match m {
-            CliPresentationMode::TelegramLike => PresentationMode::TelegramLike,
-            CliPresentationMode::ArchiveOptimized => PresentationMode::ArchiveOptimized,
-        }
-    }
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CliMediaMode {
-    #[value(name = "copy")]
-    Copy,
-    #[value(name = "link")]
-    Link,
-}
-
-impl From<CliMediaMode> for MediaMode {
-    fn from(m: CliMediaMode) -> Self {
-        match m {
-            CliMediaMode::Copy => MediaMode::Copy,
-            CliMediaMode::Link => MediaMode::Link,
-        }
-    }
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CliThemeMode {
-    #[value(name = "light")]
-    Light,
-    #[value(name = "dark")]
-    Dark,
-    #[value(name = "system")]
-    System,
-}
-
-impl From<CliThemeMode> for ThemeMode {
-    fn from(m: CliThemeMode) -> Self {
-        match m {
-            CliThemeMode::System => ThemeMode::System,
-            CliThemeMode::Light => ThemeMode::Light,
-            CliThemeMode::Dark => ThemeMode::Dark,
-        }
-    }
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum CliSplitBy {
-    #[value(name = "messages")]
-    #[default]
-    Messages,
-    #[value(name = "day")]
-    Day,
-}
-
-impl From<CliSplitBy> for vendetta_render::SplitBy {
-    fn from(s: CliSplitBy) -> Self {
-        match s {
-            CliSplitBy::Messages => vendetta_render::SplitBy::Messages,
-            CliSplitBy::Day => vendetta_render::SplitBy::Day,
-        }
-    }
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum CliDateStructure {
-    #[value(name = "flat")]
-    #[default]
-    Flat,
-    #[value(name = "tree")]
-    Tree,
-}
-
-impl From<CliDateStructure> for vendetta_render::DateStructure {
-    fn from(s: CliDateStructure) -> Self {
-        match s {
-            CliDateStructure::Flat => vendetta_render::DateStructure::Flat,
-            CliDateStructure::Tree => vendetta_render::DateStructure::Tree,
-        }
-    }
-}
+use crate::args::*;
+use crate::config::CliConfig;
 
 #[tokio::main]
 async fn main() {
@@ -666,7 +29,6 @@ async fn main() {
             if cli.quiet {
                 tracing_subscriber::EnvFilter::new("warn")
             } else {
-                // todo: remove it when i'll complete exporting topic groups
                 tracing_subscriber::EnvFilter::new(
                     "info,grammers_mtsender=warn,grammers_mtproto=warn,grammers_client=warn",
                 )
@@ -683,43 +45,16 @@ async fn main() {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Error: {e:?}");
-            EXIT_FATAL
+            ExitCode::Fatal
         }
     };
 
-    if exit_code != EXIT_SUCCESS {
-        std::process::exit(exit_code);
+    if exit_code != ExitCode::Success {
+        std::process::exit(exit_code.as_i32());
     }
 }
 
-fn resolve_credentials(
-    api_id: Option<i32>,
-    api_hash: Option<String>,
-    config: &CliConfig,
-) -> (Option<i32>, Option<String>) {
-    let init_id = api_id.or(config.api_id);
-    let init_hash = api_hash.or_else(|| config.api_hash.clone());
-    if init_id.is_some() && init_hash.is_some() {
-        return (init_id, init_hash);
-    }
-
-    ["session_test.json", "vendetta.json"]
-        .into_iter()
-        .filter_map(|candidate| std::fs::read_to_string(candidate).ok())
-        .filter_map(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
-        .fold((init_id, init_hash), |(curr_id, curr_hash), val| {
-            let id =
-                curr_id.or_else(|| val.get("api_id").and_then(|v| v.as_i64()).map(|v| v as i32));
-            let hash = curr_hash.or_else(|| {
-                val.get("api_hash")
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string)
-            });
-            (id, hash)
-        })
-}
-
-async fn run(cli: Cli) -> Result<i32> {
+async fn run(cli: Cli) -> Result<ExitCode> {
     let mut config = CliConfig::load(cli.config.as_deref());
     config.apply_account_override(cli.account.as_deref());
     let json = cli.json;
@@ -735,7 +70,7 @@ async fn run(cli: Cli) -> Result<i32> {
             phone,
             force,
         } => {
-            let (eff_api_id, eff_api_hash) = resolve_credentials(api_id, api_hash, &config);
+            let (eff_api_id, eff_api_hash) = config.resolve_credentials(api_id, api_hash);
             let eff_session = config.resolve_session_path(session, account);
 
             match subcommand {
@@ -743,19 +78,19 @@ async fn run(cli: Cli) -> Result<i32> {
                     let is_auth =
                         auth::run_auth_status(eff_api_id, eff_api_hash, eff_session, json).await?;
                     Ok(if is_auth || json {
-                        EXIT_SUCCESS
+                        ExitCode::Success
                     } else {
-                        EXIT_WARNING
+                        ExitCode::Warning
                     })
                 }
                 Some(AuthSubcommands::Logout { local_only }) => {
                     auth::run_auth_logout(eff_api_id, eff_api_hash, &eff_session, local_only, json)
                         .await?;
-                    Ok(EXIT_SUCCESS)
+                    Ok(ExitCode::Success)
                 }
                 Some(AuthSubcommands::Forget) => {
                     auth::run_auth_logout(None, None, &eff_session, true, json).await?;
-                    Ok(EXIT_SUCCESS)
+                    Ok(ExitCode::Success)
                 }
                 Some(AuthSubcommands::Login) | None => {
                     auth::run_auth(
@@ -768,7 +103,7 @@ async fn run(cli: Cli) -> Result<i32> {
                         cli.config.as_deref(),
                     )
                     .await?;
-                    Ok(EXIT_SUCCESS)
+                    Ok(ExitCode::Success)
                 }
             }
         }
@@ -780,7 +115,7 @@ async fn run(cli: Cli) -> Result<i32> {
             limit,
             peer_type,
         } => {
-            let (eff_api_id, eff_api_hash) = resolve_credentials(api_id, api_hash, &config);
+            let (eff_api_id, eff_api_hash) = config.resolve_credentials(api_id, api_hash);
             let eff_session = config.resolve_session_path(session, account);
 
             dialogs::run_dialogs(
@@ -793,7 +128,7 @@ async fn run(cli: Cli) -> Result<i32> {
             )
             .await?;
 
-            Ok(EXIT_SUCCESS)
+            Ok(ExitCode::Success)
         }
 
         Commands::Sync {
@@ -809,7 +144,7 @@ async fn run(cli: Cli) -> Result<i32> {
             to_date,
         } => {
             let eff_archive = config.resolve_archive_path(archive, account);
-            let (eff_api_id, eff_api_hash) = resolve_credentials(api_id, api_hash, &config);
+            let (eff_api_id, eff_api_hash) = config.resolve_credentials(api_id, api_hash);
             let eff_session = config.resolve_session_path(session, account);
             let target_peers = peers.map(|v| v.into_iter().map(PeerId::new).collect());
 
@@ -838,11 +173,11 @@ async fn run(cli: Cli) -> Result<i32> {
             .await?;
 
             if !summary.is_requested_scope_clean() {
-                Ok(EXIT_ERROR)
+                Ok(ExitCode::Error)
             } else if !summary.is_clean() {
-                Ok(EXIT_WARNING)
+                Ok(ExitCode::Warning)
             } else {
-                Ok(EXIT_SUCCESS)
+                Ok(ExitCode::Success)
             }
         }
 
@@ -865,7 +200,7 @@ async fn run(cli: Cli) -> Result<i32> {
         } => {
             let eff_archive = config.resolve_archive_path(archive, account);
             let eff_media_dir = config.resolve_media_dir(media_dir, &eff_archive);
-            let (eff_api_id, eff_api_hash) = resolve_credentials(api_id, api_hash, &config);
+            let (eff_api_id, eff_api_hash) = config.resolve_credentials(api_id, api_hash);
             let eff_session = config.resolve_session_path(session, account);
 
             let concurrency = media::MediaDownloadConcurrency {
@@ -906,9 +241,9 @@ async fn run(cli: Cli) -> Result<i32> {
                 || summary.retry_wait_count > 0
                 || summary.needs_reauth_count > 0
             {
-                Ok(EXIT_WARNING)
+                Ok(ExitCode::Warning)
             } else {
-                Ok(EXIT_SUCCESS)
+                Ok(ExitCode::Success)
             }
         }
 
@@ -970,6 +305,7 @@ async fn run(cli: Cli) -> Result<i32> {
                 split_by.into(),
                 date_structure.into(),
             )?;
+
             if json {
                 let out = serde_json::json!({
                     "schema_version": 1,
@@ -984,7 +320,6 @@ async fn run(cli: Cli) -> Result<i32> {
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
-                // TODO: perhaps it's better to use logging stuff to output smth like that?
                 println!("==================================================");
                 println!("HTML EXPORT COMPLETED SUCCESSFULLY");
                 println!("==================================================");
@@ -995,7 +330,7 @@ async fn run(cli: Cli) -> Result<i32> {
                 println!("Media Copied:      {}", summary.media_copied_count);
                 println!("Manifest:          {}", summary.manifest_path.display());
             }
-            Ok(EXIT_SUCCESS)
+            Ok(ExitCode::Success)
         }
 
         Commands::VerifyHtml { html_dir } => {
@@ -1014,7 +349,6 @@ async fn run(cli: Cli) -> Result<i32> {
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
-                // TODO: perhaps it's better to use logging stuff to output smth like that?
                 println!("==================================================");
                 println!("HTML ARCHIVE INTEGRITY VERIFICATION PASSED");
                 println!("==================================================");
@@ -1025,7 +359,7 @@ async fn run(cli: Cli) -> Result<i32> {
                 println!("Media checked:     {}", report.total_media_checked);
                 println!("Errors:            0");
             }
-            Ok(EXIT_SUCCESS)
+            Ok(ExitCode::Success)
         }
 
         Commands::VerifyArchive {
@@ -1079,9 +413,13 @@ async fn run(cli: Cli) -> Result<i32> {
                 .run()
                 .context("Verification engine execution failed")?;
 
-            let exit_code = report.summary.exit_code;
+            let exit_code = match report.summary.exit_code {
+                0 => ExitCode::Success,
+                1 => ExitCode::Warning,
+                2 => ExitCode::Error,
+                _ => ExitCode::Fatal,
+            };
 
-            // TODO: perhaps it's better to use logging stuff to output smth like that?
             if effective_json {
                 let json_output = vendetta_verify::format_json(&report)
                     .context("Failed to serialize verification report to JSON")?;
@@ -1113,7 +451,6 @@ async fn run(cli: Cli) -> Result<i32> {
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
-                // TODO: perhaps it's better to use logging stuff to output smth like that?
                 println!("==================================================");
                 println!("MEDIA BACKFILL COMPLETED");
                 println!("==================================================");
@@ -1122,7 +459,7 @@ async fn run(cli: Cli) -> Result<i32> {
                 println!("Media Eligible:    {}", res.media_eligible);
                 println!("Media Skipped:     {}", res.media_skipped);
             }
-            Ok(EXIT_SUCCESS)
+            Ok(ExitCode::Success)
         }
 
         Commands::VerifyMedia { archive, media_dir } => {
@@ -1146,7 +483,6 @@ async fn run(cli: Cli) -> Result<i32> {
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
-                // TODO: perhaps it's better to use logging stuff to output smth like that?
                 println!("==================================================");
                 println!("MEDIA STORAGE VERIFICATION COMPLETED");
                 println!("==================================================");
@@ -1161,9 +497,9 @@ async fn run(cli: Cli) -> Result<i32> {
                 || report.corrupted_size_count > 0
                 || report.corrupted_hash_count > 0
             {
-                Ok(EXIT_ERROR)
+                Ok(ExitCode::Error)
             } else {
-                Ok(EXIT_SUCCESS)
+                Ok(ExitCode::Success)
             }
         }
 
@@ -1188,7 +524,6 @@ async fn run(cli: Cli) -> Result<i32> {
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
-                // TODO: perhaps it's better to use logging stuff to output smth like that?
                 println!("==================================================");
                 println!("MEDIA ARCHIVE STATISTICS");
                 println!("==================================================");
@@ -1201,7 +536,7 @@ async fn run(cli: Cli) -> Result<i32> {
                 println!("Corrupted Hash:        {}", stats.corrupted_hash_count);
                 println!("Corrupted Size:        {}", stats.corrupted_size_count);
             }
-            Ok(EXIT_SUCCESS)
+            Ok(ExitCode::Success)
         }
 
         Commands::RequeueSkipped { archive } => {
@@ -1219,13 +554,12 @@ async fn run(cli: Cli) -> Result<i32> {
                 });
                 println!("{}", serde_json::to_string_pretty(&out)?);
             } else {
-                // TODO: perhaps it's better to use logging stuff to output smth like that?
                 println!("==================================================");
                 println!("REQUEUED SKIPPED MEDIA");
                 println!("==================================================");
                 println!("Re-queued Count:       {count}");
             }
-            Ok(EXIT_SUCCESS)
+            Ok(ExitCode::Success)
         }
 
         Commands::Config {
@@ -1262,10 +596,13 @@ async fn run(cli: Cli) -> Result<i32> {
                 config
             };
 
-            let sanitized = display_config.sanitized_view();
             let status = if has_updates { "saved" } else { "completed" };
+            let api_hash_redacted = display_config
+                .api_hash
+                .as_ref()
+                .map(|_| "*** (REDACTED)".to_string());
+            let api_hash_configured = display_config.api_hash.is_some();
 
-            // TODO: perhaps it's better to use logging stuff to output smth like that?
             if json {
                 println!(
                     "{}",
@@ -1274,15 +611,15 @@ async fn run(cli: Cli) -> Result<i32> {
                         "command": "config",
                         "status": status,
                         "config_path": if has_updates { Some(target_path.display().to_string()) } else { None },
-                        "api_id": sanitized.api_id,
-                        "api_hash_configured": sanitized.api_hash_configured,
-                        "api_hash_redacted": sanitized.api_hash_redacted,
-                        "account": sanitized.account,
-                        "archive": sanitized.archive,
-                        "session": sanitized.session,
-                        "media_dir": sanitized.media_dir,
-                        "output": sanitized.output,
-                        "base_dir": sanitized.base_dir,
+                        "api_id": display_config.api_id,
+                        "api_hash_configured": api_hash_configured,
+                        "api_hash_redacted": api_hash_redacted,
+                        "account": display_config.account,
+                        "archive": display_config.archive,
+                        "session": display_config.session,
+                        "media_dir": display_config.media_dir,
+                        "output": display_config.output,
+                        "base_dir": display_config.base_dir,
                     }))?
                 );
             } else {
@@ -1299,50 +636,50 @@ async fn run(cli: Cli) -> Result<i32> {
                 }
                 println!(
                     "API ID:            {}",
-                    sanitized
+                    display_config
                         .api_id
                         .map(|i| i.to_string())
                         .unwrap_or_else(|| "(not set)".to_string())
                 );
                 println!(
                     "API Hash:          {}",
-                    sanitized
-                        .api_hash_redacted
-                        .unwrap_or_else(|| "(not set)".to_string())
+                    api_hash_redacted.unwrap_or_else(|| "(not set)".to_string())
                 );
                 println!(
                     "Account:           {}",
-                    sanitized.account.unwrap_or_else(|| "default".to_string())
+                    display_config
+                        .account
+                        .unwrap_or_else(|| "default".to_string())
                 );
                 println!(
                     "Archive:           {}",
-                    sanitized
+                    display_config
                         .archive
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|| "(default layout)".to_string())
                 );
                 println!(
                     "Session:           {}",
-                    sanitized
+                    display_config
                         .session
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|| "(default layout)".to_string())
                 );
                 println!(
                     "Media Dir:         {}",
-                    sanitized
+                    display_config
                         .media_dir
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|| "(default layout)".to_string())
                 );
-                if let Some(out) = &sanitized.output {
+                if let Some(out) = &display_config.output {
                     println!("Output:            {}", out.display());
                 }
-                if let Some(base) = &sanitized.base_dir {
+                if let Some(base) = &display_config.base_dir {
                     println!("Base Dir:          {}", base.display());
                 }
             }
-            Ok(EXIT_SUCCESS)
+            Ok(ExitCode::Success)
         }
 
         Commands::Import { subcommand } => match subcommand {
@@ -1381,7 +718,7 @@ async fn run(cli: Cli) -> Result<i32> {
                     println!("Media Copied:      {}", summary.media_copied_count);
                     println!("Media Skipped:     {}", summary.media_skipped_count);
                 }
-                Ok(EXIT_SUCCESS)
+                Ok(ExitCode::Success)
             }
         },
 
@@ -1453,7 +790,7 @@ async fn run(cli: Cli) -> Result<i32> {
                     println!("Media Copied:      {}", summary.media_copied_count);
                     println!("Manifest:          {}", summary.manifest_path.display());
                 }
-                Ok(EXIT_SUCCESS)
+                Ok(ExitCode::Success)
             }
         },
     }

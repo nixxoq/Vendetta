@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -11,8 +13,8 @@ use vendetta_media::{
 };
 use vendetta_model::{MediaFilterPolicy, MediaQueueStats, MediaStats};
 use vendetta_storage::ArchiveDb;
-use vendetta_tg_adapter::TelegramAdapter;
 
+use crate::client::resolve_adapter;
 use crate::progress::{CliProgress, MediaDownloadProgressTracker, MediaVerifyProgressTracker};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,19 +104,23 @@ fn print_scheduler_summary(summary: &SchedulerSummary, json: bool) -> Result<()>
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_download_media_with_adapter(
-    db: Arc<ArchiveDb>,
-    adapter: Arc<dyn TelegramAdapter>,
-    archive_root: impl Into<PathBuf>,
+pub async fn run_download_media(
+    api_id: Option<i32>,
+    api_hash: Option<String>,
+    session_path: &Path,
+    archive_path: &Path,
+    media_dir: &Path,
     concurrency: MediaDownloadConcurrency,
     backfill: bool,
     avatars_only: bool,
     reactions_only: bool,
     policy: MediaFilterPolicy,
-    mut progress: CliProgress,
+    quiet: bool,
     json: bool,
 ) -> Result<SchedulerSummary> {
+    let adapter = resolve_adapter(api_id, api_hash, session_path).await?;
+    let db = Arc::new(ArchiveDb::open(archive_path).context("Failed to open archive database")?);
+
     if !adapter
         .is_authorized()
         .await
@@ -123,9 +129,10 @@ pub async fn run_download_media_with_adapter(
         bail!("Telegram session is not authorized. Please run 'vendetta auth' to log in.");
     }
 
-    let root_path = archive_root.into();
+    let root_path = media_dir.to_path_buf();
     let storage_layout = StorageLayoutManager::new(root_path.clone());
     let _ = storage_layout.ensure_dirs();
+    let mut progress = CliProgress::new(quiet, json);
 
     if reactions_only {
         progress.stage("Synchronizing custom emoji reactions");
@@ -286,8 +293,8 @@ pub async fn run_download_media_with_adapter(
     let tracker = Arc::new(Mutex::new(MediaDownloadProgressTracker::new(
         total_eligible,
         total_bytes,
-        progress.is_quiet(),
-        progress.is_json(),
+        quiet,
+        json,
     )));
 
     let tracker_clone = Arc::clone(&tracker);
@@ -310,40 +317,6 @@ pub async fn run_download_media_with_adapter(
 
     print_scheduler_summary(&summary, json)?;
     Ok(summary)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn run_download_media(
-    api_id: Option<i32>,
-    api_hash: Option<String>,
-    session_path: &Path,
-    archive_path: &Path,
-    media_dir: &Path,
-    concurrency: MediaDownloadConcurrency,
-    backfill: bool,
-    avatars_only: bool,
-    reactions_only: bool,
-    policy: MediaFilterPolicy,
-    quiet: bool,
-    json: bool,
-) -> Result<SchedulerSummary> {
-    let adapter = crate::adapter_factory::resolve_adapter(api_id, api_hash, session_path).await?;
-    let db = Arc::new(ArchiveDb::open(archive_path).context("Failed to open archive database")?);
-
-    let progress = CliProgress::new(quiet, json);
-    run_download_media_with_adapter(
-        db,
-        adapter,
-        media_dir.to_path_buf(),
-        concurrency,
-        backfill,
-        avatars_only,
-        reactions_only,
-        policy,
-        progress,
-        json,
-    )
-    .await
 }
 
 pub fn run_verify_media(

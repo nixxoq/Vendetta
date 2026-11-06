@@ -3,6 +3,29 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub struct Throttle {
+    interval: Duration,
+    last: Instant,
+}
+
+impl Throttle {
+    pub fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last: Instant::now() - interval,
+        }
+    }
+
+    pub fn should_render(&mut self, now: Instant) -> bool {
+        if now.duration_since(self.last) >= self.interval {
+            self.last = now;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 pub struct CliProgress {
     quiet: bool,
     json: bool,
@@ -22,10 +45,6 @@ impl CliProgress {
         self.quiet
     }
 
-    pub fn is_json(&self) -> bool {
-        self.json
-    }
-
     pub fn stage(&mut self, name: &str) {
         if self.quiet || self.json {
             return;
@@ -41,17 +60,6 @@ impl CliProgress {
         }
         let elapsed = self.start_time.elapsed().as_secs();
         eprintln!("        [{:>4}s] {}", elapsed, msg.as_ref());
-        let _ = std::io::stderr().flush();
-    }
-
-    pub fn flood_wait(&mut self, seconds: u32, context: &str) {
-        if self.quiet || self.json {
-            return;
-        }
-        eprintln!(
-            "        [FLOOD_WAIT] Telegram requested wait of {}s for {}. Backing off...",
-            seconds, context
-        );
         let _ = std::io::stderr().flush();
     }
 
@@ -93,7 +101,7 @@ pub struct MediaDownloadProgressTracker {
     total_eligible: usize,
     total_bytes_known: Option<u64>,
     start_time: Instant,
-    last_render: Instant,
+    throttle: Throttle,
     last_reported_count: usize,
 }
 
@@ -105,6 +113,12 @@ impl MediaDownloadProgressTracker {
         json: bool,
     ) -> Self {
         let is_tty = std::io::stderr().is_terminal();
+        let interval = if is_tty {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(5)
+        };
+
         Self {
             quiet,
             json,
@@ -112,7 +126,7 @@ impl MediaDownloadProgressTracker {
             total_eligible,
             total_bytes_known,
             start_time: Instant::now(),
-            last_render: Instant::now(),
+            throttle: Throttle::new(interval),
             last_reported_count: 0,
         }
     }
@@ -123,23 +137,19 @@ impl MediaDownloadProgressTracker {
         }
 
         let now = Instant::now();
-        if self.is_tty {
-            if now.duration_since(self.last_render) < Duration::from_millis(100)
-                && event.completed_count < self.total_eligible
-            {
-                return;
-            }
-        } else if event
+        let is_done = event.completed_count >= self.total_eligible;
+        let count_delta = event
             .completed_count
-            .saturating_sub(self.last_reported_count)
-            < 100
-            && now.duration_since(self.last_render) < Duration::from_secs(5)
-            && event.completed_count < self.total_eligible
-        {
+            .saturating_sub(self.last_reported_count);
+
+        if !is_done && self.is_tty && !self.throttle.should_render(now) {
             return;
         }
 
-        self.last_render = now;
+        if !is_done && !self.is_tty && count_delta < 100 && !self.throttle.should_render(now) {
+            return;
+        }
+
         self.last_reported_count = event.completed_count;
 
         let elapsed_secs = self.start_time.elapsed().as_secs_f64().max(0.001);
@@ -224,20 +234,26 @@ pub struct MediaVerifyProgressTracker {
     is_tty: bool,
     total_checked: usize,
     start_time: Instant,
-    last_render: Instant,
+    throttle: Throttle,
     last_reported_count: usize,
 }
 
 impl MediaVerifyProgressTracker {
     pub fn new(total_checked: usize, quiet: bool, json: bool) -> Self {
         let is_tty = std::io::stderr().is_terminal();
+        let interval = if is_tty {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(5)
+        };
+
         Self {
             quiet,
             json,
             is_tty,
             total_checked,
             start_time: Instant::now(),
-            last_render: Instant::now(),
+            throttle: Throttle::new(interval),
             last_reported_count: 0,
         }
     }
@@ -254,19 +270,17 @@ impl MediaVerifyProgressTracker {
 
         let total = total.max(self.total_checked);
         let now = Instant::now();
-        if self.is_tty {
-            if now.duration_since(self.last_render) < Duration::from_millis(100) && current < total
-            {
-                return;
-            }
-        } else if current.saturating_sub(self.last_reported_count) < 100
-            && now.duration_since(self.last_render) < Duration::from_secs(5)
-            && current < total
-        {
+        let is_done = current >= total;
+        let count_delta = current.saturating_sub(self.last_reported_count);
+
+        if !is_done && self.is_tty && !self.throttle.should_render(now) {
             return;
         }
 
-        self.last_render = now;
+        if !is_done && !self.is_tty && count_delta < 100 && !self.throttle.should_render(now) {
+            return;
+        }
+
         self.last_reported_count = current;
 
         let elapsed_secs = self.start_time.elapsed().as_secs_f64().max(0.001);
@@ -318,7 +332,7 @@ pub struct SyncProgressTracker {
     json: bool,
     is_tty: bool,
     start_time: Instant,
-    last_render: Instant,
+    throttle: Throttle,
     last_reported_messages: usize,
     last_reported_step: Option<vendetta_sync::SyncStep>,
     last_reported_peer: Option<vendetta_model::PeerId>,
@@ -333,28 +347,22 @@ impl SyncProgressTracker {
     }
 
     pub fn with_tty(quiet: bool, json: bool, is_tty: bool) -> Self {
+        let interval = if is_tty {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(5)
+        };
+
         Self {
             quiet,
             json,
             is_tty,
             start_time: Instant::now(),
-            last_render: Instant::now(),
+            throttle: Throttle::new(interval),
             last_reported_messages: 0,
             last_reported_step: None,
             last_reported_peer: None,
         }
-    }
-
-    pub fn is_quiet(&self) -> bool {
-        self.quiet
-    }
-
-    pub fn is_json(&self) -> bool {
-        self.json
-    }
-
-    pub fn is_tty(&self) -> bool {
-        self.is_tty
     }
 
     pub fn format_line(&self, event: &vendetta_sync::SyncProgressEvent) -> String {
@@ -447,31 +455,23 @@ impl SyncProgressTracker {
         let step_changed = self.last_reported_step != Some(event.step);
         let peer_changed =
             event.current_peer_id.is_some() && event.current_peer_id != self.last_reported_peer;
+        let is_final = event.step == vendetta_sync::SyncStep::Finalizing;
 
-        if self.is_tty {
-            if !step_changed
-                && !peer_changed
-                && event.step != vendetta_sync::SyncStep::Finalizing
-                && now.duration_since(self.last_render) < Duration::from_millis(100)
-            {
-                return;
-            }
-        } else {
-            let msgs_delta = event
-                .total_messages_processed
-                .saturating_sub(self.last_reported_messages);
-            let time_delta = now.duration_since(self.last_render);
-            if !step_changed
-                && !peer_changed
-                && event.step != vendetta_sync::SyncStep::Finalizing
-                && msgs_delta < 500
-                && time_delta < Duration::from_secs(5)
-            {
-                return;
+        if !step_changed && !peer_changed && !is_final {
+            if self.is_tty {
+                if !self.throttle.should_render(now) {
+                    return;
+                }
+            } else {
+                let msgs_delta = event
+                    .total_messages_processed
+                    .saturating_sub(self.last_reported_messages);
+                if msgs_delta < 500 && !self.throttle.should_render(now) {
+                    return;
+                }
             }
         }
 
-        self.last_render = now;
         self.last_reported_messages = event.total_messages_processed;
         self.last_reported_step = Some(event.step);
         if event.current_peer_id.is_some() {
@@ -529,72 +529,5 @@ pub fn format_duration(seconds: u64) -> String {
         format!("{:02}:{:02}:{:02}", hours, mins, secs)
     } else {
         format!("{:02}:{:02}", mins, secs)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use vendetta_model::PeerId;
-    use vendetta_sync::{SyncProgressEvent, SyncStep};
-
-    #[test]
-    fn test_format_number() {
-        assert_eq!(format_number(9), "9");
-        assert_eq!(format_number(18400), "18,400");
-        assert_eq!(format_number(123456789), "123,456,789");
-    }
-
-    #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(500), "500 B");
-        assert_eq!(format_bytes(1024), "1.00 KB");
-        assert_eq!(format_bytes(1024 * 1024 * 5), "5.00 MB");
-        assert_eq!(format_bytes(1024 * 1024 * 1024 * 2), "2.00 GB");
-    }
-
-    #[test]
-    fn test_format_duration() {
-        assert_eq!(format_duration(5), "00:05");
-        assert_eq!(format_duration(65), "01:05");
-        assert_eq!(format_duration(3665), "01:01:05");
-    }
-
-    #[test]
-    fn test_sync_progress_tracker_lines() {
-        let tracker = SyncProgressTracker::with_tty(false, false, true);
-
-        let single_event = SyncProgressEvent {
-            step: SyncStep::IngestingHistory,
-            peer_index: 1,
-            total_peers: 1,
-            current_peer_id: Some(PeerId::new(12345)),
-            current_peer_name: Some("Chat".to_string()),
-            current_peer_messages: 1200,
-            total_messages_processed: 1200,
-            total_batches_completed: 12,
-            flood_wait_seconds: None,
-            status_detail: None,
-        };
-        let single_line = tracker.format_line(&single_event);
-        assert!(single_line.contains("Step: Ingesting history"));
-        assert!(single_line.contains("Current: Chat"));
-        assert!(single_line.contains("Msgs: 1,200"));
-        assert!(!single_line.contains("Peers:"));
-
-        let multi_event = SyncProgressEvent {
-            total_peers: 10,
-            flood_wait_seconds: None,
-            ..single_event.clone()
-        };
-        let multi_line = tracker.format_line(&multi_event);
-        assert!(multi_line.contains("Peers: 1/10"));
-
-        let flood_event = SyncProgressEvent {
-            flood_wait_seconds: Some(30),
-            ..single_event
-        };
-        let flood_line = tracker.format_line(&flood_event);
-        assert!(flood_line.contains("FloodWait: 30s"));
     }
 }

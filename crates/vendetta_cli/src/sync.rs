@@ -1,12 +1,16 @@
+#![allow(clippy::too_many_arguments)]
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc};
 use vendetta_model::{PeerId, PeerType};
 use vendetta_storage::ArchiveDb;
 use vendetta_sync::pipeline::{CoordinatedSyncPipeline, FullSyncRunSummary};
-use vendetta_tg_adapter::TelegramAdapter;
 
-use crate::progress::{CliProgress, SyncProgressTracker};
+use crate::{
+    client::resolve_adapter,
+    progress::{CliProgress, SyncProgressTracker},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRunOutput {
@@ -93,7 +97,6 @@ fn print_sync_output(
         };
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        // TODO: perhaps it's better to use logging stuff to output smth like that?
         let scope_label = if is_explicit_scope {
             "Explicit Target"
         } else {
@@ -105,6 +108,7 @@ fn print_sync_output(
             "s"
         };
 
+        // TODO: perhaps it's better to use logging stuff to output smth like that?
         println!("==================================================");
         println!("ARCHIVE SYNCHRONIZATION COMPLETED");
         println!("==================================================");
@@ -145,19 +149,23 @@ fn print_sync_output(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_sync_with_adapter(
-    adapter: Arc<dyn TelegramAdapter>,
-    db: Arc<ArchiveDb>,
+pub async fn run_sync(
+    api_id: Option<i32>,
+    api_hash: Option<String>,
+    session_path: &Path,
     archive_path: &Path,
     target_peers: Option<Vec<PeerId>>,
     peer_type_filter: Option<PeerType>,
     exclude_peer_type: Option<PeerType>,
     limit: Option<usize>,
     date_range: (Option<i64>, Option<i64>),
-    mut progress: CliProgress,
+    quiet: bool,
     json: bool,
 ) -> Result<FullSyncRunSummary> {
+    let adapter = resolve_adapter(api_id, api_hash, session_path).await?;
+    let db = Arc::new(ArchiveDb::open(archive_path).context("Failed to open archive database")?);
+    let mut progress = CliProgress::new(quiet, json);
+
     progress.stage("Step 1/4: Discovering dialogs and resolving target peers");
     let is_explicit_scope = target_peers.as_ref().is_some_and(|p| !p.is_empty());
 
@@ -229,37 +237,4 @@ pub async fn run_sync_with_adapter(
 
     print_sync_output(archive_path, &summary, is_explicit_scope, json)?;
     Ok(summary)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn run_sync(
-    api_id: Option<i32>,
-    api_hash: Option<String>,
-    session_path: &Path,
-    archive_path: &Path,
-    target_peers: Option<Vec<PeerId>>,
-    peer_type_filter: Option<PeerType>,
-    exclude_peer_type: Option<PeerType>,
-    limit: Option<usize>,
-    date_range: (Option<i64>, Option<i64>),
-    quiet: bool,
-    json: bool,
-) -> Result<FullSyncRunSummary> {
-    let adapter = crate::adapter_factory::resolve_adapter(api_id, api_hash, session_path).await?;
-    let db = Arc::new(ArchiveDb::open(archive_path).context("Failed to open archive database")?);
-
-    let progress = CliProgress::new(quiet, json);
-    run_sync_with_adapter(
-        adapter,
-        db,
-        archive_path,
-        target_peers,
-        peer_type_filter,
-        exclude_peer_type,
-        limit,
-        date_range,
-        progress,
-        json,
-    )
-    .await
 }
